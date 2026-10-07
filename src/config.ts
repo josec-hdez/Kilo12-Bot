@@ -38,6 +38,7 @@ const envSchema = z.object({
   GOOGLE_SA_JSON: optionalString,
   DRIVE_IPV_FOLDER_ID: optionalString,
   CUADRE_SHEET_ID: optionalString,
+  CUADRE_SEED_PATH: optionalString,
   DB_PATH: z.string().default('./data/kilo12.db'),
   TZ: z.string().default('America/Havana'),
 });
@@ -49,6 +50,8 @@ export interface Config {
   googleServiceAccountJson: string | undefined;
   driveIpvFolderId: string | undefined;
   cuadreSheetId: string | undefined;
+  /** Cuadre exportado (.xlsx) para la carga inicial del catálogo si la base está vacía. */
+  cuadreSeedPath: string | undefined;
   dbPath: string;
   timezone: string;
   /** Sin service account o sin hoja de cuadre, el bot usa una hoja simulada en memoria. */
@@ -72,6 +75,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     googleServiceAccountJson: parsed.GOOGLE_SA_JSON,
     driveIpvFolderId: parsed.DRIVE_IPV_FOLDER_ID,
     cuadreSheetId: parsed.CUADRE_SHEET_ID,
+    cuadreSeedPath: parsed.CUADRE_SEED_PATH,
     dbPath: parsed.DB_PATH,
     timezone: parsed.TZ,
     useFakeSheets: parsed.GOOGLE_SA_JSON === undefined || parsed.CUADRE_SHEET_ID === undefined,
