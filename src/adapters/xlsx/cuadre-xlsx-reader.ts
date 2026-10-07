@@ -2,23 +2,20 @@ import ExcelJS from 'exceljs';
 import { cellFormula, cellNumber, cellText, rawValue } from './cells.js';
 import {
   CUADRE_HEADERS,
+  CuadreFormatError,
   FIRST_DATA_ROW,
-  TC_LABEL_CELL,
-  TC_VALUE_CELL,
-  parseTc,
+  tcFromSummary,
 } from '../../core/cuadre-layout.js';
 import { normalizeName } from '../../core/tabs.js';
 import type { CuadreRow, CuadreSheet, SheetCellContent } from '../../core/types.js';
-import type { CuadreSource } from '../../ports/cuadre-source.js';
+import type { CuadreReader, CuadreSource } from '../../ports/cuadre-source.js';
+
+export { CuadreFormatError };
 
 const DAY_TAB_PATTERN = /^\d{1,2}$/;
 const SUMMARY_COLUMNS = ['P', 'Q'] as const;
 /** Filas del resumen P:Q que se leen; el original llega hasta la TC en la fila 18. */
 const SUMMARY_LAST_ROW = 30;
-
-export class CuadreFormatError extends Error {
-  override name = 'CuadreFormatError';
-}
 
 function assertHeaders(sheet: ExcelJS.Worksheet): void {
   const header = sheet.getRow(1);
@@ -85,31 +82,7 @@ function readSheet(sheet: ExcelJS.Worksheet): CuadreSheet {
   }
 
   const summary = readSummary(sheet);
-  return { tabName: sheet.name, rows, summary, tc: readTc(summary) };
-}
-
-const TC_LABEL_PATTERN = /^\s*tc\b/i;
-
-/**
- * TC del día: primero P18/Q18 (layout de la plantilla). Si no está ahí, busca la
- * etiqueta `TC.` en la columna P, porque algunas hojas tienen el resumen corrido
- * una fila (la 04 la tiene en P19).
- */
-function readTc(summary: CuadreSheet['summary']): number | null {
-  const fixed = parseTc(
-    summary[TC_LABEL_CELL]?.value ?? null,
-    summary[TC_VALUE_CELL]?.value ?? null,
-  );
-  if (fixed !== null) return fixed;
-
-  for (const [address, content] of Object.entries(summary)) {
-    const row = /^P(\d+)$/.exec(address)?.[1];
-    if (row === undefined || typeof content?.value !== 'string') continue;
-    if (!TC_LABEL_PATTERN.test(content.value)) continue;
-    const tc = parseTc(content.value, summary[`Q${row}`]?.value ?? null);
-    if (tc !== null) return tc;
-  }
-  return null;
+  return { tabName: sheet.name, rows, summary, tc: tcFromSummary(summary) };
 }
 
 /** Cuadre exportado como .xlsx, con una pestaña por día (`01`, `02`…). */
@@ -135,4 +108,12 @@ export class CuadreXlsxReader implements CuadreSource {
     }
     return readSheet(sheet);
   }
+}
+
+/** Expone un cuadre .xlsx ya cargado como lector asíncrono (para /validar sin hoja real). */
+export function asCuadreReader(source: CuadreSource): CuadreReader {
+  return {
+    listDays: () => Promise.resolve(source.listDays()),
+    readDay: (tabName) => Promise.resolve(source.readDay(tabName)),
+  };
 }
