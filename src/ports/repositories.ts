@@ -1,6 +1,7 @@
 import type { Role } from '../core/auth.js';
 import type { CostSource } from '../core/costs.js';
 import type { Equivalence } from '../core/equivalences.js';
+import type { Grid } from './sheets-gateway.js';
 
 /** Reloj inyectable: las pruebas controlan el vencimiento de las confirmaciones. */
 export type Clock = () => Date;
@@ -149,4 +150,74 @@ export interface SettingsRepository {
   get(key: string): unknown;
   set(key: string, value: unknown): void;
   all(): Record<string, unknown>;
+}
+
+export interface ChangeLogInput {
+  telegramId: number | null;
+  /** Qué se hizo: `load_ipv`, `set_tc`, `undo`… */
+  action: string;
+  /** Sobre qué: la pestaña (`03`) o el producto. */
+  target: string | null;
+  /** Detalle serializable; incluye el motivo cuando una dueña fuerza una confirmación. */
+  detail: unknown;
+}
+
+export interface ChangeLogEntry extends ChangeLogInput {
+  id: number;
+  at: string;
+}
+
+export interface ChangeLogRepository {
+  /** Devuelve el id de la entrada. */
+  record(entry: ChangeLogInput): number;
+  list(): ChangeLogEntry[];
+}
+
+export const SNAPSHOT_KIND = {
+  /** Se creó una pestaña: deshacer = borrarla. */
+  CREATE_TAB: 'create_tab',
+  /** Se editaron celdas: deshacer = volver a escribir lo que había. */
+  CELLS: 'cells',
+} as const;
+
+/** Contenido previo de un rango, leído con fórmulas y ya completado hasta su tamaño. */
+export interface RangeSnapshot {
+  a1: string;
+  values: Grid;
+}
+
+export interface CreateTabSnapshot {
+  kind: typeof SNAPSHOT_KIND.CREATE_TAB;
+  tab: string;
+}
+
+export interface CellsSnapshot {
+  kind: typeof SNAPSHOT_KIND.CELLS;
+  tab: string;
+  ranges: RangeSnapshot[];
+}
+
+export type SnapshotPayload = CreateTabSnapshot | CellsSnapshot;
+
+export interface Snapshot {
+  id: number;
+  changeLogId: number | null;
+  telegramId: number;
+  payload: SnapshotPayload;
+  createdAt: string;
+  revertedAt: string | null;
+}
+
+export interface NewSnapshot {
+  changeLogId: number | null;
+  telegramId: number;
+  payload: SnapshotPayload;
+}
+
+export interface SnapshotRepository {
+  create(snapshot: NewSnapshot): Snapshot;
+  get(id: number): Snapshot | undefined;
+  /** La última escritura sin deshacer; de ese usuario, o de cualquiera si no se indica. */
+  lastActive(telegramId?: number): Snapshot | undefined;
+  markReverted(id: number): void;
 }
