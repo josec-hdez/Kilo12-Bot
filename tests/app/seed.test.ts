@@ -6,6 +6,7 @@ import { SqliteSettingsRepository } from '../../src/adapters/sqlite/settings-rep
 import { SqliteUserRepository } from '../../src/adapters/sqlite/users-repo.js';
 import { CuadreXlsxReader } from '../../src/adapters/xlsx/cuadre-xlsx-reader.js';
 import {
+  initialCuadreSeed,
   seedAll,
   seedCatalogFromCuadre,
   seedEquivalences,
@@ -142,5 +143,18 @@ describe('seedAll', () => {
     expect(summary).toEqual({ catalog: null, equivalences: null });
     expect(deps.catalog.listProducts()).toEqual([]);
     expect(deps.users.list()).toHaveLength(2);
+  });
+});
+
+describe('initialCuadreSeed', () => {
+  it('usa la última pestaña del cuadre solo si el catálogo está vacío', async () => {
+    const cuadre = await CuadreXlsxReader.fromFile(fixture('Cuadre K12 Remoto.xlsx'));
+    const seed = initialCuadreSeed(catalog, cuadre);
+    expect(seed?.source).toBe('seed:cuadre-05');
+    expect(seed?.rows).toHaveLength(rows05.length);
+    expect(initialCuadreSeed(catalog, null)).toBeNull();
+
+    catalog.ensureProduct('arroz');
+    expect(initialCuadreSeed(catalog, cuadre)).toBeNull();
   });
 });
