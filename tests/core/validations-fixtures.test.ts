@@ -100,6 +100,20 @@ describe('validaciones sobre el cuadre real 01–05', () => {
     });
   });
 
+  it('🟡 margen mayor al 70%: solo la primera vez que aparece cada producto', () => {
+    const highMargin = findings.filter((f) => f.code === FINDING_CODE.HIGH_MARGIN);
+    expect(highMargin.map((f) => [f.day, f.product])).toEqual([
+      ['01', 'cigarro popular de bodega'],
+      ['03', 'cigarro popular rojo'],
+    ]);
+  });
+
+  it('sin gastos fijos configurados no reporta los días sin gastos', () => {
+    expect(findings.some((f) => f.code === FINDING_CODE.NO_EXPENSES)).toBe(false);
+    const withFixed = validateDays(sheets, { hasFixedExpenses: true });
+    expect(withFixed.filter((f) => f.code === FINDING_CODE.NO_EXPENSES)).toHaveLength(5);
+  });
+
   it('criterio 4: la utilidad bruta sumada 01–05 es 181,228.5 (≈ 181,229)', () => {
     const total = sheets.reduce((sum, s) => sum + computeTotals(s.rows).utilidadBruta, 0);
     expect(total).toBe(181_228.5);

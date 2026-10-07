@@ -5,6 +5,7 @@ import {
   FINDING_CODE,
   SEVERITY,
   validateDay,
+  validateDays,
   validateTransition,
   type Finding,
 } from '../../src/core/validations.js';
@@ -64,6 +65,15 @@ function goodSummary(): CuadreSheet['summary'] {
     P14: label('Utilidad'),
     Q14: formula('Q6-Q13'),
   };
+}
+
+/** Resumen sin ningún gasto registrado. */
+function noExpenses(): CuadreSheet['summary'] {
+  return Object.fromEntries(
+    Object.entries({ ...goodSummary(), Q13: formula('SUM(Q8:Q12)', 0) }).filter(
+      ([address]) => address !== 'P9' && address !== 'Q9',
+    ),
+  );
 }
 
 function sheet(tabName: string, rows: CuadreRow[], extra: Partial<CuadreSheet> = {}): CuadreSheet {
@@ -174,16 +184,66 @@ describe('validateDay', () => {
     ]);
   });
 
-  it('⚪ día sin gastos registrados y sin TC', () => {
-    const summary: CuadreSheet['summary'] = Object.fromEntries(
-      Object.entries({ ...goodSummary(), Q13: formula('SUM(Q8:Q12)', 0) }).filter(
-        ([address]) => address !== 'P9' && address !== 'Q9',
-      ),
-    );
-    const findings = validateDay(sheet('01', [row(2, {})], { summary, tc: null }));
+  it('⚪ día sin gastos registrados y sin TC, cuando hay gastos fijos configurados', () => {
+    const findings = validateDay(sheet('01', [row(2, {})], { summary: noExpenses(), tc: null }), {
+      hasFixedExpenses: true,
+    });
     expect(findings.map((f) => [f.code, f.severity])).toEqual([
       [FINDING_CODE.MISSING_TC, SEVERITY.WHITE],
       [FINDING_CODE.NO_EXPENSES, SEVERITY.WHITE],
+    ]);
+  });
+
+  it('no reporta el día sin gastos mientras no haya gastos fijos configurados', () => {
+    expect(codes(validateDay(sheet('01', [row(2, {})], { summary: noExpenses() })))).toEqual([]);
+  });
+});
+
+describe('margen mayor al 70%: solo la primera vez o cuando cambia el costo o el precio', () => {
+  const barato = (costo: number, precio = 100) =>
+    row(2, { product: 'barato', costo, precio, final: 8 });
+
+  it('🟡 lo reporta si el día anterior no tenía el producto', () => {
+    const previous = sheet('01', [row(2, { product: 'otro' })]);
+    expect(codes(validateDay(sheet('02', [barato(20)]), { previous }))).toEqual([
+      FINDING_CODE.HIGH_MARGIN,
+    ]);
+  });
+
+  it('no lo repite si el costo y el precio no cambiaron', () => {
+    const previous = sheet('01', [barato(20)]);
+    expect(codes(validateDay(sheet('02', [barato(20)]), { previous }))).toEqual([]);
+  });
+
+  it('🟡 lo vuelve a reportar si cambió el costo', () => {
+    const previous = sheet('01', [barato(25)]);
+    expect(codes(validateDay(sheet('02', [barato(20)]), { previous }))).toEqual([
+      FINDING_CODE.HIGH_MARGIN,
+    ]);
+  });
+
+  it('🟡 lo vuelve a reportar si cambió el precio', () => {
+    const previous = sheet('01', [barato(20, 90)]);
+    expect(codes(validateDay(sheet('02', [barato(20)]), { previous }))).toEqual([
+      FINDING_CODE.HIGH_MARGIN,
+    ]);
+  });
+
+  it('🟡 lo reporta si el día anterior el producto no tenía existencia ni movimiento', () => {
+    const previous = sheet('01', [row(2, { product: 'barato', costo: 20, inicio: 0, final: 0 })]);
+    expect(codes(validateDay(sheet('02', [barato(20)]), { previous }))).toEqual([
+      FINDING_CODE.HIGH_MARGIN,
+    ]);
+  });
+
+  it('en un rango solo lo reporta el primer día si nada cambia', () => {
+    const findings = validateDays([
+      sheet('01', [barato(20)]),
+      sheet('02', [barato(20)]),
+      sheet('03', [barato(20)]),
+    ]);
+    expect(findings.filter((f) => f.code === FINDING_CODE.HIGH_MARGIN).map((f) => f.day)).toEqual([
+      '01',
     ]);
   });
 });
