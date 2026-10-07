@@ -121,18 +121,18 @@ describe('buildCuadreDraft', () => {
   it('agrega al final los productos sin emparejar, con costo vacío, amarillo y sugerencias', () => {
     const draft = buildCuadreDraft(
       ipvDay([
-        ipvRow('jugo gusto pineapple', { inicial: 12, salida: 1, precio: 550, final: 11 }),
+        ipvRow('jugo gusto pinaple', { inicial: 12, salida: 1, precio: 550, final: 11 }),
         ipvRow('aceite', { inicial: 1, final: 1 }),
       ]),
       catalog,
       EQUIVALENCES,
     );
 
-    expect(draft.rows.map((r) => r.product)).toEqual(['aceite', 'jugo gusto pineapple']);
+    expect(draft.rows.map((r) => r.product)).toEqual(['aceite', 'jugo gusto pinaple']);
     expect(draft.rows[1]).toMatchObject({ rowNumber: 3, isNew: true, costo: null });
     expect(draft.unmatched).toEqual([
       {
-        ipvProduct: 'jugo gusto pineapple',
+        ipvProduct: 'jugo gusto pinaple',
         suggestions: [expect.objectContaining({ product: 'jugo gusto pinneaple' })],
       },
     ]);

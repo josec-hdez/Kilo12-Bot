@@ -58,7 +58,7 @@ describe('tabla de equivalencias', () => {
   });
 
   it('no inventa emparejamientos: devuelve null si no hay equivalencia ni nombre idéntico', () => {
-    expect(resolveIpvProduct('jugo gusto pineapple', index, CATALOG)).toBeNull();
+    expect(resolveIpvProduct('jugo gusto pinaple', index, CATALOG)).toBeNull();
   });
 
   it('rechaza un alias del IPV asignado a dos productos distintos', () => {

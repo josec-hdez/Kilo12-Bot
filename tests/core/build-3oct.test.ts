@@ -57,10 +57,10 @@ describe('hoja del 3 oct armada desde el IPV real', () => {
     expect(draft.yellowCells).toContain(`B${String(pollo?.rowNumber)}`);
   });
 
-  it('reporta los productos del IPV sin equivalencia, sin inventar emparejamientos', () => {
-    // Nombres del IPV que no están en la tabla ni coinciden exactamente con el cuadre.
-    // Quedan como productos nuevos hasta que las dueñas confirmen la equivalencia.
-    expect(draft.unmatched.map((u) => [u.ipvProduct, u.suggestions[0]?.product ?? null])).toEqual([
+  it('empareja los 11 productos confirmados por las dueñas y no deja ninguno sin pareja', () => {
+    expect(draft.unmatched).toEqual([]);
+    expect(draft.rows.filter((r) => r.isNew)).toEqual([]);
+    const confirmed: [string, string][] = [
       ['chicharos verdes', 'chicharos'],
       ['cigarro popular rojo caja', 'cigarro popular rojo'],
       ['energizante 5shots', 'energizante 5 shot'],
@@ -72,12 +72,14 @@ describe('hoja del 3 oct armada desde el IPV real', () => {
       ['refresco instantaneo YEYA', 'refresco instantaneo'],
       ['shaka piña colada 250ml', 'shaka piña colada'],
       ['zumo de limon', 'zumo limon'],
-    ]);
-    for (const { ipvProduct } of draft.unmatched) {
-      expect(draft.rows.find((r) => r.product === ipvProduct)).toMatchObject({
-        isNew: true,
-        costo: null,
-      });
+    ];
+    for (const [ipvName, cuadreName] of confirmed) {
+      const row = draft.rows.find((r) => r.sourceIpvProducts.includes(ipvName));
+      expect(row?.product).toBe(cuadreName);
     }
+  });
+
+  it('solo quedan sin costo los productos sin dato de las dueñas', () => {
+    expect(draft.missingCost).toEqual(['chupachupa', 'fanguito', 'peter biskiato', 'pollo']);
   });
 });
