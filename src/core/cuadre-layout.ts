@@ -95,3 +95,35 @@ export function parseTc(labelCell: unknown, valueCell: unknown): number | null {
   const parsed = Number(match[1].replace(/,/g, ''));
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
+
+/** Celdas del resumen P:Q por dirección, tal como las leen los lectores del cuadre. */
+export type SummaryValues = Partial<Record<string, { value: unknown }>>;
+
+const TC_LABEL_PATTERN = /^\s*tc\b/i;
+
+/**
+ * TC del día a partir del resumen: primero P18/Q18 (layout de la plantilla). Si no
+ * está ahí, busca la etiqueta `TC.` en la columna P, porque algunas hojas tienen el
+ * resumen corrido una fila (la 04 la tiene en P19).
+ */
+export function tcFromSummary(summary: SummaryValues): number | null {
+  const fixed = parseTc(
+    summary[TC_LABEL_CELL]?.value ?? null,
+    summary[TC_VALUE_CELL]?.value ?? null,
+  );
+  if (fixed !== null) return fixed;
+
+  for (const [address, content] of Object.entries(summary)) {
+    const row = /^P(\d+)$/.exec(address)?.[1];
+    if (row === undefined || typeof content?.value !== 'string') continue;
+    if (!TC_LABEL_PATTERN.test(content.value)) continue;
+    const tc = parseTc(content.value, summary[`Q${row}`]?.value ?? null);
+    if (tc !== null) return tc;
+  }
+  return null;
+}
+
+/** La pestaña no tiene el layout del cuadre (encabezados, pestaña inexistente…). */
+export class CuadreFormatError extends Error {
+  override name = 'CuadreFormatError';
+}
