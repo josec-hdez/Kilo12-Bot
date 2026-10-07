@@ -1,0 +1,5 @@
+dist/
+coverage/
+data/
+tests/fixtures/
+CLAUDE.md
