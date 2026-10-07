@@ -50,4 +50,16 @@ export const EQUIVALENCES: readonly Equivalence[] = [
   { cuadre: 'sorbetos vitarella', ipv: ['sorbeto vitarella'] },
   { cuadre: 'marranetas', ipv: ['pellis marranetas'] },
   { cuadre: 'totox', ipv: ['pellis totox'] },
+  // Confirmadas por las dueñas el 2026-10-07 a partir del IPV del 3 oct.
+  { cuadre: 'chicharos', ipv: ['chicharos verdes'] },
+  { cuadre: 'cigarro popular rojo', ipv: ['cigarro popular rojo caja'] },
+  { cuadre: 'energizante 5 shot', ipv: ['energizante 5shots'] },
+  { cuadre: 'harina de trigo', ipv: ['harina de trigo 1kg'] },
+  { cuadre: 'jugo gusto pinneaple', ipv: ['jugo gusto pineapple'] },
+  { cuadre: 'ketchup', ipv: ['ketchup vima'] },
+  { cuadre: 'mayonesa holland park', ipv: ['mayonesa hollandpark'] },
+  { cuadre: 'pasta tomate', ipv: ['pasta de tomate'] },
+  { cuadre: 'refresco instantaneo', ipv: ['refresco instantaneo YEYA'] },
+  { cuadre: 'shaka piña colada', ipv: ['shaka piña colada 250ml'] },
+  { cuadre: 'zumo limon', ipv: ['zumo de limon'] },
 ];
