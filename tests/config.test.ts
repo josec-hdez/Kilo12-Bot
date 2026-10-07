@@ -16,6 +16,7 @@ describe('loadConfig', () => {
     expect(config.timezone).toBe('America/Havana');
     expect(config.googleServiceAccountJson).toBeUndefined();
     expect(config.useFakeSheets).toBe(true);
+    expect(config.cuadreSeedPath).toBeUndefined();
   });
 
   it('trata las variables vacías como ausentes', () => {
