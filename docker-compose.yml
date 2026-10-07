@@ -1,7 +1,9 @@
 services:
   bot:
     build: .
-    restart: unless-stopped
+    # Solo reinicia si el proceso falla (código ≠ 0). Un token o una configuración
+    # inválidos terminan con código 0 y no entran en un bucle de reinicios.
+    restart: on-failure
     env_file: .env
     environment:
       TZ: America/Havana
