@@ -64,3 +64,68 @@ export function utilidadNeta(totals: Pick<CuadreTotals, 'utilidadBruta'>, gastos
 export function salesMatchIpv(ventaTotal: number, importeTotal: number | null): boolean {
   return importeTotal !== null && Math.abs(ventaTotal - importeTotal) <= SALES_TOLERANCE;
 }
+
+/**
+ * Lo que el IPV cuenta como venta sin serlo: su SALIDA no resta merma ni consumo.
+ * Σ (merma + consumo) × precio.
+ */
+export function mermaConsumoAmount(rows: readonly TotalsRow[]): number {
+  return money(
+    rows.reduce((total, row) => total + (n(row.merma) + n(row.consumo)) * n(row.precio), 0),
+  );
+}
+
+export const SALES_CHECK = {
+  MATCH: 'match',
+  MERMA_EXPLAINED: 'merma_explained',
+  MISMATCH: 'mismatch',
+  NO_IPV_TOTAL: 'no_ipv_total',
+} as const;
+
+interface SalesCheckBase {
+  /** Venta Total del cuadre. */
+  ventaTotal: number;
+}
+
+export interface SalesMatch extends SalesCheckBase {
+  status: typeof SALES_CHECK.MATCH;
+}
+
+/** Se acepta, pero se avisa con 🟡: el IPV cuenta `amount` CUP de merma/consumo como venta. */
+export interface SalesMermaExplained extends SalesCheckBase {
+  status: typeof SALES_CHECK.MERMA_EXPLAINED;
+  amount: number;
+}
+
+/** Bloquea la carga. `diff` = venta del cuadre − IMPORTE TOTAL. */
+export interface SalesMismatch extends SalesCheckBase {
+  status: typeof SALES_CHECK.MISMATCH;
+  diff: number;
+}
+
+export interface SalesNoIpvTotal extends SalesCheckBase {
+  status: typeof SALES_CHECK.NO_IPV_TOTAL;
+}
+
+export type SalesCheck = SalesMatch | SalesMermaExplained | SalesMismatch | SalesNoIpvTotal;
+
+/**
+ * Compara la venta del cuadre con el IMPORTE TOTAL del IPV. La única diferencia
+ * aceptada es exactamente la merma y el consumo valorados a precio (CLAUDE.md, T2).
+ */
+export function checkIpvSales(rows: readonly TotalsRow[], importeTotal: number | null): SalesCheck {
+  const { ventaTotal } = computeTotals(rows);
+  if (importeTotal === null) return { status: SALES_CHECK.NO_IPV_TOTAL, ventaTotal };
+  if (salesMatchIpv(ventaTotal, importeTotal)) return { status: SALES_CHECK.MATCH, ventaTotal };
+
+  const amount = mermaConsumoAmount(rows);
+  if (amount > 0 && Math.abs(importeTotal - ventaTotal - amount) <= SALES_TOLERANCE) {
+    return { status: SALES_CHECK.MERMA_EXPLAINED, ventaTotal, amount };
+  }
+  return { status: SALES_CHECK.MISMATCH, ventaTotal, diff: money(ventaTotal - importeTotal) };
+}
+
+/** Solo una coincidencia exacta o explicada por merma deja confirmar sin advertencia. */
+export function salesCheckAllowsConfirm(check: SalesCheck): boolean {
+  return check.status === SALES_CHECK.MATCH || check.status === SALES_CHECK.MERMA_EXPLAINED;
+}
