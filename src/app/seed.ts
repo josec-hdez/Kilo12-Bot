@@ -7,6 +7,7 @@ import type {
   SettingsRepository,
   UserRepository,
 } from '../ports/repositories.js';
+import type { CuadreSource } from '../ports/cuadre-source.js';
 
 /**
  * Datos iniciales. Todas las funciones son idempotentes: se pueden correr en cada
@@ -146,4 +147,18 @@ export function seedAll(deps: SeedDeps, input: SeedInput): SeedSummary {
   const catalog = seedCatalogFromCuadre(deps.catalog, input.cuadre.rows, input.cuadre.source);
   const equivalences = seedEquivalences(deps.catalog, input.equivalences);
   return { catalog, equivalences };
+}
+
+/**
+ * Hoja del cuadre para la carga inicial: la última pestaña de días del archivo.
+ * Solo si el catálogo está vacío; después, SQLite manda y el cuadre no se relee.
+ */
+export function initialCuadreSeed(
+  catalog: CatalogRepository,
+  cuadre: CuadreSource | null,
+): CuadreSeedSource | null {
+  if (cuadre === null || catalog.listProducts().length > 0) return null;
+  const last = cuadre.listDays().at(-1);
+  if (last === undefined) return null;
+  return { rows: cuadre.readDay(last).rows, source: `seed:cuadre-${last}` };
 }
