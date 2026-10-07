@@ -15,16 +15,21 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "db:generate": "drizzle-kit generate"
   },
   "dependencies": {
+    "better-sqlite3": "13.0.3",
+    "drizzle-orm": "0.45.3",
     "exceljs": "4.4.0",
     "fastest-levenshtein": "1.0.16",
     "zod": "4.6.5"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@types/better-sqlite3": "9.6.0",
     "@types/node": "26.6.4",
+    "drizzle-kit": "0.31.11",
     "eslint": "10.12.0",
     "prettier": "3.9.9",
     "tsx": "4.23.15",
