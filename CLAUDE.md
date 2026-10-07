@@ -83,6 +83,17 @@ El IPV y el cuadre usan nombres distintos. Mantén y usa esta tabla, y amplíala
 | sazones | sazon completo |
 | sorbetos joy / vitarella | sorbeto joy / vitarella |
 | marranetas / totox | pellis marranetas / pellis totox |
+| chicharos | chicharos verdes |
+| cigarro popular rojo | cigarro popular rojo caja |
+| energizante 5 shot | energizante 5shots |
+| harina de trigo | harina de trigo 1kg |
+| jugo gusto pinneaple | jugo gusto pineapple |
+| ketchup | ketchup vima |
+| mayonesa holland park | mayonesa hollandpark |
+| pasta tomate | pasta de tomate |
+| refresco instantaneo | refresco instantaneo YEYA |
+| shaka piña colada | shaka piña colada 250ml |
+| zumo limon | zumo de limon |
 
 **Regla:** un producto siempre conserva el mismo nombre en todas las hojas del cuadre. Nunca alternes, por ejemplo, "refresco dispensado" y "refresco reenvasado".
 
@@ -105,6 +116,7 @@ El IPV y el cuadre usan nombres distintos. Mantén y usa esta tabla, y amplíala
 - **Productos sin existencia ni movimiento:** se pueden omitir.
 - Escribe todas las fórmulas, no valores calculados.
 - **Verificación obligatoria:** la Venta Total de la hoja debe ser igual al `IMPORTE TOTAL` del IPV. Si no coincide, no la des por buena.
+  - **Única diferencia aceptada:** el IPV calcula `SALIDA = inicial + entrada − final` (no resta merma ni consumo); el cuadre sí los resta. Si la diferencia es **exactamente** `Σ (merma + consumo) × precio`, se acepta y se reporta como 🟡 ("el IPV cuenta como venta X CUP de merma/consumo"). Cualquier otra diferencia bloquea.
 - Entrega un `.xlsx` con **solo esa hoja**, listo para Google Sheets (Archivo → Importar → Insertar hojas nuevas), para que conserve las fórmulas.
 
 ### T3. Validaciones (correr siempre antes de cualquier reporte)
