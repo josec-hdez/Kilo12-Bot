@@ -63,6 +63,8 @@ export function can(role: Role, permission: Permission): boolean {
 export const COMMAND_PERMISSION: Readonly<Record<string, Permission | null>> = {
   start: null,
   ayuda: null,
+  /** Abandona el motivo pendiente de "⚠️ Confirmar igual". */
+  cancelar: null,
   ipv: PERMISSION.LOAD_IPV,
   validar: PERMISSION.VALIDATE,
   comparar: PERMISSION.VALIDATE,
