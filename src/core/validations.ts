@@ -65,6 +65,22 @@ export interface Finding {
 /** Margen sobre el precio a partir del cual se pide confirmar el costo. */
 export const HIGH_MARGIN_THRESHOLD = 0.7;
 
+export interface ValidationOptions {
+  /**
+   * Si hay gastos fijos configurados, un día sin gastos es sospechoso y se reporta.
+   * Sin gastos fijos (lo normal hoy) no se reporta: se revisa en el checklist de /cerrar.
+   */
+  hasFixedExpenses?: boolean;
+}
+
+export interface ValidateDayOptions extends ValidationOptions {
+  /**
+   * Hoja del día anterior. Con ella, el margen mayor al 70% solo se reporta si el
+   * producto es nuevo o si cambió su costo o su precio; sin ella, se reporta siempre.
+   */
+  previous?: CuadreSheet;
+}
+
 /** Hallazgos que impiden cargar un IPV, aunque la venta cuadre. */
 const BLOCKING_CODES: ReadonlySet<FindingCode> = new Set([
   FINDING_CODE.EMPTY_FINAL,
@@ -121,7 +137,17 @@ const FORMULA_SEVERITY: Readonly<Record<FormulaColumn, Severity>> = {
 const canonicalFormula = (formula: string): string =>
   formula.replace(/^=/, '').replace(/\s+/g, '').toUpperCase();
 
-function rowFindings(day: string, row: CuadreRow): Finding[] {
+/** El margen alto ya se reportó ayer con el mismo costo y precio: no se repite. */
+function highMarginAlreadyReported(row: CuadreRow, prev: CuadreRow | undefined): boolean {
+  return (
+    prev !== undefined &&
+    prev.costo === row.costo &&
+    prev.precio === row.precio &&
+    hasStockOrMovement(prev)
+  );
+}
+
+function rowFindings(day: string, row: CuadreRow, prev: CuadreRow | undefined): Finding[] {
   const out: Finding[] = [];
   const { product, rowNumber: r } = row;
   const sold = salida(row);
@@ -177,7 +203,10 @@ function rowFindings(day: string, row: CuadreRow): Finding[] {
           { product, cell: `B${r}` },
         ),
       );
-    } else if ((precio - costo) / precio > HIGH_MARGIN_THRESHOLD) {
+    } else if (
+      (precio - costo) / precio > HIGH_MARGIN_THRESHOLD &&
+      !highMarginAlreadyReported(row, prev)
+    ) {
       const margin = Math.round(((precio - costo) / precio) * 100);
       out.push(
         finding(
@@ -295,7 +324,7 @@ function checkSum(
   ];
 }
 
-function summaryFindings(sheet: CuadreSheet): Finding[] {
+function summaryFindings(sheet: CuadreSheet, options: ValidationOptions): Finding[] {
   const out: Finding[] = [];
   const day = sheet.tabName;
   const labels = summaryRows(sheet);
@@ -376,7 +405,7 @@ function summaryFindings(sheet: CuadreSheet): Finding[] {
   }
 
   const totalGastos = gastos === undefined ? null : sheet.summary[q(gastos)]?.value;
-  if (typeof totalGastos !== 'number' || totalGastos === 0) {
+  if (options.hasFixedExpenses === true && (typeof totalGastos !== 'number' || totalGastos === 0)) {
     out.push(
       finding(
         SEVERITY.WHITE,
@@ -391,9 +420,12 @@ function summaryFindings(sheet: CuadreSheet): Finding[] {
 }
 
 /** Validaciones de una sola hoja del cuadre. */
-export function validateDay(sheet: CuadreSheet): Finding[] {
-  const rows = sheet.rows.flatMap((row) => rowFindings(sheet.tabName, row));
-  return [...rows, ...summaryFindings(sheet)];
+export function validateDay(sheet: CuadreSheet, options: ValidateDayOptions = {}): Finding[] {
+  const previous = options.previous === undefined ? undefined : byProduct(options.previous);
+  const rows = sheet.rows.flatMap((row) =>
+    rowFindings(sheet.tabName, row, previous?.get(normalizeName(row.product))),
+  );
+  return [...rows, ...summaryFindings(sheet, options)];
 }
 
 // ---------------------------------------------------------------- entre días
@@ -520,11 +552,18 @@ export function validateTransition(prev: CuadreSheet, next: CuadreSheet): Findin
   return out;
 }
 
-/** Corre todas las validaciones sobre días consecutivos, ordenadas por severidad. */
-export function validateDays(sheets: readonly CuadreSheet[]): Finding[] {
+/**
+ * Corre todas las validaciones sobre días consecutivos, ordenadas por severidad.
+ * Cada día se valida contra el anterior del rango; el primero no tiene anterior.
+ */
+export function validateDays(
+  sheets: readonly CuadreSheet[],
+  options: ValidationOptions = {},
+): Finding[] {
   const out: Finding[] = [];
   sheets.forEach((sheet, index) => {
-    out.push(...validateDay(sheet));
+    const previous = index > 0 ? sheets[index - 1] : undefined;
+    out.push(...validateDay(sheet, previous === undefined ? options : { ...options, previous }));
     const next = sheets[index + 1];
     if (next !== undefined) out.push(...validateTransition(sheet, next));
   });
