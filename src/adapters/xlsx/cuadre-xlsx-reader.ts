@@ -85,8 +85,31 @@ function readSheet(sheet: ExcelJS.Worksheet): CuadreSheet {
   }
 
   const summary = readSummary(sheet);
-  const tc = parseTc(summary[TC_LABEL_CELL]?.value ?? null, summary[TC_VALUE_CELL]?.value ?? null);
-  return { tabName: sheet.name, rows, summary, tc };
+  return { tabName: sheet.name, rows, summary, tc: readTc(summary) };
+}
+
+const TC_LABEL_PATTERN = /^\s*tc\b/i;
+
+/**
+ * TC del día: primero P18/Q18 (layout de la plantilla). Si no está ahí, busca la
+ * etiqueta `TC.` en la columna P, porque algunas hojas tienen el resumen corrido
+ * una fila (la 04 la tiene en P19).
+ */
+function readTc(summary: CuadreSheet['summary']): number | null {
+  const fixed = parseTc(
+    summary[TC_LABEL_CELL]?.value ?? null,
+    summary[TC_VALUE_CELL]?.value ?? null,
+  );
+  if (fixed !== null) return fixed;
+
+  for (const [address, content] of Object.entries(summary)) {
+    const row = /^P(\d+)$/.exec(address)?.[1];
+    if (row === undefined || typeof content?.value !== 'string') continue;
+    if (!TC_LABEL_PATTERN.test(content.value)) continue;
+    const tc = parseTc(content.value, summary[`Q${row}`]?.value ?? null);
+    if (tc !== null) return tc;
+  }
+  return null;
 }
 
 /** Cuadre exportado como .xlsx, con una pestaña por día (`01`, `02`…). */
