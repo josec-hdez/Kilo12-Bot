@@ -6,3 +6,13 @@ export interface CuadreSource {
   listDays(): string[];
   readDay(tabName: string): CuadreSheet;
 }
+
+/**
+ * Lectura asíncrona del cuadre, para /validar: la hoja de Google Sheets (o la
+ * simulada) o, mientras no haya hoja, el .xlsx exportado.
+ */
+export interface CuadreReader {
+  /** Pestañas de días (`01`, `02`…), en el orden de la hoja. */
+  listDays(): Promise<string[]>;
+  readDay(tabName: string): Promise<CuadreSheet>;
+}
