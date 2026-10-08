@@ -2,7 +2,24 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { FakeSheetsGateway } from '../../../src/adapters/sheets/fake-sheets-gateway.js';
 import { SheetsCuadreReader } from '../../../src/adapters/sheets/sheets-cuadre-reader.js';
 import { CuadreFormatError, CUADRE_HEADERS, rowFormulas } from '../../../src/core/cuadre-layout.js';
-import type { CellValue } from '../../../src/ports/sheets-gateway.js';
+import type {
+  CellValue,
+  Grid,
+  Render,
+  SheetsGateway,
+  TabRange,
+} from '../../../src/ports/sheets-gateway.js';
+
+/** Cuenta las lecturas que llegan a la hoja (cada una es una llamada a la API). */
+function countingReads(inner: SheetsGateway): { gateway: SheetsGateway; reads: TabRange[][] } {
+  const reads: TabRange[][] = [];
+  const gateway = Object.create(inner) as SheetsGateway;
+  gateway.readRanges = (ranges: readonly TabRange[], render: Render): Promise<Grid[]> => {
+    reads.push([...ranges]);
+    return inner.readRanges(ranges, render);
+  };
+  return { gateway, reads };
+}
 
 const formulaRow = (n: number): CellValue[] => {
   const f = rowFormulas(n);
@@ -96,6 +113,27 @@ describe('SheetsCuadreReader', () => {
 
   it('rechaza una pestaña sin los encabezados del cuadre', async () => {
     await expect(new SheetsCuadreReader(sheets).readDay('04')).rejects.toThrow(CuadreFormatError);
+  });
+
+  it('varios días con dos llamadas en total (fórmulas y valores), no dos por día', async () => {
+    await sheets.duplicateTab('03', '05', { hidden: false });
+    const { gateway, reads } = countingReads(sheets);
+    const days = await new SheetsCuadreReader(gateway).readDays(['03', '05']);
+    expect(days.map((d) => d.tabName)).toEqual(['03', '05']);
+    expect(days[1]?.rows[0]).toMatchObject({ product: 'arroz', costo: 400 });
+    expect(reads).toHaveLength(2);
+    expect(reads[0]).toEqual([
+      { tab: '03', a1: 'A1:N300' },
+      { tab: '03', a1: 'P1:Q30' },
+      { tab: '05', a1: 'A1:N300' },
+      { tab: '05', a1: 'P1:Q30' },
+    ]);
+  });
+
+  it('readDays vacío no llama a la hoja', async () => {
+    const { gateway, reads } = countingReads(sheets);
+    expect(await new SheetsCuadreReader(gateway).readDays([])).toEqual([]);
+    expect(reads).toHaveLength(0);
   });
 
   it('rechaza una pestaña que no existe', async () => {

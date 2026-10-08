@@ -5,6 +5,7 @@ import {
   ROLE,
   can,
   canRunCommand,
+  commandPermission,
   isRole,
   type Permission,
 } from '../../src/core/auth.js';
@@ -66,6 +67,16 @@ describe('permisos por comando', () => {
   it('un comando desconocido solo lo puede intentar una dueña', () => {
     expect(canRunCommand(ROLE.OWNER, 'inventado')).toBe(true);
     expect(canRunCommand(ROLE.PARTNER, 'inventado')).toBe(false);
+  });
+
+  it('los reportes exigen ver finanzas: dueña y socio sí, dependiente no', () => {
+    const reports = ['hoy', 'dia', 'semana', 'mes', 'rango', 'gastos', 'inversion', 'ganancia'];
+    for (const command of [...reports, 'top', 'margen', 'fila', 'producto']) {
+      expect(commandPermission(command)).toBe(PERMISSION.VIEW_FINANCIALS);
+      expect(canRunCommand(ROLE.OWNER, command)).toBe(true);
+      expect(canRunCommand(ROLE.PARTNER, command)).toBe(true);
+      expect(canRunCommand(ROLE.CLERK, command)).toBe(false);
+    }
   });
 
   it('cada comando mapeado apunta a un permiso existente', () => {

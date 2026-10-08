@@ -15,12 +15,28 @@ Las reglas de negocio (fórmulas, equivalencias IPV ↔ cuadre, validaciones) es
 | `/ayuda`                | Lista de comandos según el rol.                                                                                                                                                                                                                 |
 | `/cancelar`             | Abandona una acción en curso (por ejemplo, cuando el bot espera el motivo de "⚠️ Confirmar igual").                                                                                                                                             |
 
+**Reportes** (dueñas y socios; el dependiente recibe "No autorizado para reportes"). Todo se recalcula desde las cantidades, costos y precios de cada fila, no desde el resumen de la hoja. Los días son las pestañas `DD` del libro: el libro es el mes.
+
+| Comando                                        | Qué hace                                                                                                                                                                              |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/hoy`, `/dia [03]`                            | Venta, costo de lo vendido, utilidad bruta, margen, gastos y utilidad neta (CUP y USD con la TC del día), top 5 por venta y por utilidad, y cantidad de alertas.                      |
+| `/mes`, `/semana`, `/rango 02 04`              | Tabla por día (venta, costo, utilidad bruta, margen, gastos, utilidad neta), totales, promedio diario, margen promedio **simple** y **ponderado**, mejor y peor día.                  |
+| `/ganancia`                                    | Acumulado según las hojas y **ajustado** (rango estimado para la venta sin costo).                                                                                                    |
+| `/gastos [02 04]`                              | Gastos de "Otros Gastos" por día y por concepto.                                                                                                                                      |
+| `/inversion [02 04]`                           | Inversión inicial, compras, costo de lo vendido e inversión final por día, al costo.                                                                                                  |
+| `/top [5] [venta\|utilidad\|unidades] [02 04]` | Ranking de productos.                                                                                                                                                                 |
+| `/margen [02 04]`                              | Productos por margen; alerta los de alta rotación con margen menor al 15%.                                                                                                            |
+| `/fila pollo 03`                               | Toda la fila de un producto ese día, recalculada; marca las celdas donde la hoja guarda otro valor.                                                                                   |
+| `/producto pollo [02 04]`                      | Suma de todas las filas del producto, detalle por día, cambios de precio y costo, existencia y días de inventario. Si el nombre coincide con varios productos, el bot ofrece botones. |
+
+Una venta sin costo cuenta como ganancia completa: los reportes la marcan como utilidad **inflada** y dicen cuántos CUP afecta.
+
 **Roles**
 
 | Rol           | Puede                                                                                         |
 | ------------- | --------------------------------------------------------------------------------------------- |
 | `dueno`       | Todo, incluido "⚠️ Confirmar igual" para forzar una carga bloqueada (con motivo obligatorio). |
-| `socio`       | `/validar` y ver cifras. Gastos y sugerencias llegan en la siguiente entrega.                 |
+| `socio`       | `/validar` y los reportes. Gastos y sugerencias llegan en la siguiente entrega.               |
 | `dependiente` | `/ipv`. No ve costos ni utilidades.                                                           |
 
 **Sin IA.** El bot no interpreta mensajes libres: cualquier texto que no sea un comando recibe el menú de botones del rol.
@@ -43,6 +59,18 @@ Las reglas de negocio (fórmulas, equivalencias IPV ↔ cuadre, validaciones) es
    validar - Revisar errores del cuadre
    tc - Fijar la tasa de cambio del día
    deshacer - Revertir la última escritura
+   hoy - Resumen de hoy
+   dia - Resumen de un día
+   mes - Utilidad de cada día del mes y su suma
+   semana - Resumen de los últimos 7 días
+   rango - Resumen entre dos días
+   ganancia - Ganancia acumulada
+   gastos - Gastos por día
+   inversion - Inversión por día
+   top - Ranking de productos
+   margen - Productos por margen
+   fila - Fila de un producto en un día
+   producto - Totales de un producto
    ayuda - Ver los comandos
    cancelar - Cancelar la acción en curso
    ```
@@ -139,7 +167,8 @@ Roles válidos: `dueno`, `socio`, `dependiente`. Para desactivar a alguien, pon 
    - Si hay bloqueos 🔴 (por ejemplo, `CANT. FINAL` vacía con existencia), no aparece ✅. Una dueña puede usar **⚠️ Confirmar igual** y escribir el motivo, que queda registrado.
 2. **Fijar la TC:** `/tc 780`.
 3. **Revisar:** `/validar` o `/validar semana`.
-4. **Corregir un error:** `/deshacer` borra la pestaña recién creada o restaura la TC anterior.
+4. **Ver cómo va:** `/hoy`, `/mes`, `/ganancia`.
+5. **Corregir un error:** `/deshacer` borra la pestaña recién creada o restaura la TC anterior.
 
 ## Seguridad
 
@@ -155,4 +184,4 @@ Roles válidos: `dueno`, `socio`, `dependiente`. Para desactivar a alguien, pon 
 ## Pendiente
 
 - **Nombres de pestaña por mes.** Las pestañas diarias se llaman `01`, `02`… sin mes. Falta decidir entre un libro por mes o pestañas `DD-MM`. Mientras tanto, si la pestaña del día ya existe, el bot rechaza la carga y no sobrescribe nada.
-- **Siguiente entrega:** reportes (`/hoy`, `/semana`, `/mes`), gastos (`/gasto`), inventario y compras, sugerencias, vigilancia de la carpeta de Drive y tareas programadas (09:00 y 21:00).
+- **Siguiente entrega:** registrar gastos (`/gasto`), inventario y compras, sugerencias, vigilancia de la carpeta de Drive y tareas programadas (09:00 y 21:00).

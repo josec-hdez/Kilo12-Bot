@@ -43,6 +43,10 @@ function readRow(row: ExcelJS.Row): CuadreRow {
     final: cellNumber(at('J')),
     salida: cellNumber(at('I')),
     ventaBruta: cellNumber(at('K')),
+    invsInicial: cellNumber(at('C')),
+    costoFinal: cellNumber(at('L')),
+    invsFinal: cellNumber(at('M')),
+    utilidad: cellNumber(at('N')),
     formulas: {
       C: cellFormula(at('C')),
       I: cellFormula(at('I')),
@@ -115,5 +119,6 @@ export function asCuadreReader(source: CuadreSource): CuadreReader {
   return {
     listDays: () => Promise.resolve(source.listDays()),
     readDay: (tabName) => Promise.resolve(source.readDay(tabName)),
+    readDays: (tabNames) => Promise.resolve(tabNames.map((tabName) => source.readDay(tabName))),
   };
 }

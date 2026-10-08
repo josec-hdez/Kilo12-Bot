@@ -4,6 +4,7 @@ import {
   createSheetsClient,
   GoogleSheetsGateway,
 } from './adapters/sheets/google-sheets-gateway.js';
+import { NotifyingSheetsGateway } from './adapters/sheets/notifying-sheets-gateway.js';
 import { SheetsCuadreReader } from './adapters/sheets/sheets-cuadre-reader.js';
 import { SqliteCatalogRepository } from './adapters/sqlite/catalog-repo.js';
 import { openDatabase } from './adapters/sqlite/db.js';
@@ -16,6 +17,7 @@ import { SqliteSettingsRepository } from './adapters/sqlite/settings-repo.js';
 import { SqliteAccessLogRepository, SqliteUserRepository } from './adapters/sqlite/users-repo.js';
 import { createBot } from './adapters/telegram/bot.js';
 import { asCuadreReader, CuadreXlsxReader } from './adapters/xlsx/cuadre-xlsx-reader.js';
+import { CachedCuadreReader } from './app/cached-cuadre-reader.js';
 import { initialCuadreSeed, seedAll } from './app/seed.js';
 import { ConfigError, loadConfig, type Config } from './config.js';
 import { EQUIVALENCES } from './core/equivalences.js';
@@ -74,7 +76,12 @@ async function main(): Promise<void> {
     },
   );
 
-  const sheets = createSheetsGateway(config);
+  const rawSheets = createSheetsGateway(config);
+  // Memoria de 60 s del cuadre para los reportes; cualquier escritura la vacía.
+  const cuadre = new CachedCuadreReader(chooseCuadreReader(config, rawSheets, seedFile), clock);
+  const sheets = new NotifyingSheetsGateway(rawSheets, () => {
+    cuadre.invalidate();
+  });
   const products = catalog.listProducts().length;
   console.log(
     `Kilo 12 bot: ${config.useFakeSheets ? 'hoja SIMULADA en memoria (faltan GOOGLE_SA_JSON o CUADRE_SHEET_ID)' : 'Google Sheets'}, ` +
@@ -99,7 +106,7 @@ async function main(): Promise<void> {
       },
       auth: { users, accessLog: new SqliteAccessLogRepository(db) },
       settings,
-      cuadre: chooseCuadreReader(config, sheets, seedFile),
+      cuadre,
       timezone: config.timezone,
     },
     { token: config.telegramToken },

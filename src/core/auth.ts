@@ -71,13 +71,19 @@ export const COMMAND_PERMISSION: Readonly<Record<string, Permission | null>> = {
   tc: PERMISSION.SET_TC,
   deshacer: PERMISSION.UNDO,
   cerrar: PERMISSION.SET_TC,
-  hoy: PERMISSION.VIEW_REPORTS,
-  dia: PERMISSION.VIEW_REPORTS,
-  semana: PERMISSION.VIEW_REPORTS,
-  mes: PERMISSION.VIEW_REPORTS,
-  rango: PERMISSION.VIEW_REPORTS,
+  // Reportes: todos muestran costos o utilidades, así que exigen ver finanzas.
+  hoy: PERMISSION.VIEW_FINANCIALS,
+  dia: PERMISSION.VIEW_FINANCIALS,
+  semana: PERMISSION.VIEW_FINANCIALS,
+  mes: PERMISSION.VIEW_FINANCIALS,
+  rango: PERMISSION.VIEW_FINANCIALS,
+  gastos: PERMISSION.VIEW_FINANCIALS,
+  inversion: PERMISSION.VIEW_FINANCIALS,
   ganancia: PERMISSION.VIEW_FINANCIALS,
+  top: PERMISSION.VIEW_FINANCIALS,
   margen: PERMISSION.VIEW_FINANCIALS,
+  fila: PERMISSION.VIEW_FINANCIALS,
+  producto: PERMISSION.VIEW_FINANCIALS,
   stock: PERMISSION.VIEW_STOCK,
   gasto: PERMISSION.RECORD_EXPENSE,
   entrada: PERMISSION.RECORD_ENTRY,
@@ -95,13 +101,18 @@ export function commandName(raw: string): string {
 }
 
 /**
- * ¿Puede este rol ejecutar el comando? Un comando sin mapear exige `CONFIGURE`,
- * de modo que solo una dueña lo intenta y nadie más se cuela por un olvido.
+ * Permiso que exige el comando. Un comando sin mapear exige `CONFIGURE`, de modo
+ * que solo una dueña lo intenta y nadie más se cuela por un olvido.
  */
-export function canRunCommand(role: Role, command: string): boolean {
+export function commandPermission(command: string): Permission | null {
   const name = commandName(command);
-  const permission = Object.hasOwn(COMMAND_PERMISSION, name)
-    ? COMMAND_PERMISSION[name]
+  return Object.hasOwn(COMMAND_PERMISSION, name)
+    ? (COMMAND_PERMISSION[name] ?? null)
     : PERMISSION.CONFIGURE;
-  return permission === null || permission === undefined || can(role, permission);
+}
+
+/** ¿Puede este rol ejecutar el comando? */
+export function canRunCommand(role: Role, command: string): boolean {
+  const permission = commandPermission(command);
+  return permission === null || can(role, permission);
 }

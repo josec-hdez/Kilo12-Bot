@@ -10,6 +10,8 @@ export const CALLBACK = {
   FORCE: 'force',
   IPV_DAY: 'ipvday',
   MENU: 'menu',
+  /** Elegir producto en /fila o /producto: `prod:<id>:<índice>`. */
+  PRODUCT: 'prod',
 } as const;
 
 export function confirmKeyboard(pendingId: string, requiresForce: boolean): InlineKeyboard {
@@ -36,8 +38,26 @@ const MENU_LABEL: Readonly<Record<string, string>> = {
   validar: '🔎 Validar',
   tc: '💱 TC',
   deshacer: '↩️ Deshacer',
+  hoy: '📊 Hoy',
+  mes: '📅 Mes',
+  semana: '🗓 Semana',
+  ganancia: '💰 Ganancia',
   ayuda: '📖 Ayuda',
 };
+
+/** Opciones cuando el nombre coincide con varios productos. */
+export function productChoiceKeyboard(
+  choiceId: string,
+  options: readonly string[],
+): InlineKeyboard {
+  const keyboard = new InlineKeyboard();
+  options.forEach((option, index) => {
+    keyboard
+      .text(option.replace(/\s+/g, ' ').trim(), `${CALLBACK.PRODUCT}:${choiceId}:${String(index)}`)
+      .row();
+  });
+  return keyboard;
+}
 
 export function menuKeyboard(commands: readonly CommandHelp[]): InlineKeyboard {
   const keyboard = new InlineKeyboard();

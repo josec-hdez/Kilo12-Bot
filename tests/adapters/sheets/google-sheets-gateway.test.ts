@@ -1,5 +1,7 @@
 import type { sheets_v4 } from '@googleapis/sheets';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { SheetsCuadreReader } from '../../../src/adapters/sheets/sheets-cuadre-reader.js';
+import { CuadreFormatError } from '../../../src/core/cuadre-layout.js';
 import {
   a1WithTab,
   backgroundRequests,
@@ -114,6 +116,22 @@ describe('GoogleSheetsGateway', () => {
     await gateway.setBackground('03', [], YELLOW);
     expect(client.valueUpdates).toEqual([]);
     expect(client.batchUpdates).toEqual([]);
+  });
+
+  it('el lector del cuadre pide todos los días en dos batchGet (fórmulas y valores)', async () => {
+    const days = new RecordingClient([
+      { sheetId: 3, title: '03', hidden: false, index: 0 },
+      { sheetId: 4, title: '04', hidden: false, index: 1 },
+    ]);
+    const reader = new SheetsCuadreReader(new GoogleSheetsGateway(days, 'sheet-id', () => 999));
+    // El cliente de prueba devuelve rangos vacíos: falla al validar los encabezados,
+    // pero después de pedir los datos, que es lo que se comprueba aquí.
+    await expect(reader.readDays(['03', '04'])).rejects.toThrow(CuadreFormatError);
+    const ranges = ["'03'!A1:N300", "'03'!P1:Q30", "'04'!A1:N300", "'04'!P1:Q30"];
+    expect(days.gets).toEqual([
+      { ranges, render: 'FORMULA' },
+      { ranges, render: 'UNFORMATTED_VALUE' },
+    ]);
   });
 
   it('borra, oculta y limpia por nombre de pestaña', async () => {

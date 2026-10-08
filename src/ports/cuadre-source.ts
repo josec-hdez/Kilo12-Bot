@@ -15,4 +15,6 @@ export interface CuadreReader {
   /** Pestañas de días (`01`, `02`…), en el orden de la hoja. */
   listDays(): Promise<string[]>;
   readDay(tabName: string): Promise<CuadreSheet>;
+  /** Varios días de una vez, en el mismo orden (en Sheets: dos llamadas en total). */
+  readDays(tabNames: readonly string[]): Promise<CuadreSheet[]>;
 }
