@@ -6,6 +6,7 @@ import {
   dayReport,
   expensesReport,
   inventoryReport,
+  marginsDiffer,
   marginsReport,
   monthDays,
   monthReport,
@@ -20,6 +21,7 @@ import {
   type ReportDeps,
   type ReportResult,
 } from '../../src/app/reports.js';
+import { MAX_TABLE_WIDTH, preLines } from '../../src/app/report-format.js';
 import { EQUIVALENCES } from '../../src/core/equivalences.js';
 import { buildAliasIndex } from '../../src/core/mapping.js';
 import { productTotals, summarizeDay, summarizePeriod } from '../../src/core/reports.js';
@@ -73,9 +75,15 @@ describe('período (cuadre real 01–05)', () => {
     expect(text).toContain('Mes (pestañas 01–05 · 5 días)');
     for (const day of ['01', '02', '03', '04', '05'])
       expect(text).toMatch(new RegExp(`^${day} `, 'm'));
-    expect(text).toMatch(/^Total\s+528,462\s+347,234\s+181,229/m);
+    // Tabla corta (Día · Venta · Neta · Marg); los montos exactos, en el resumen.
+    expect(text).toMatch(/^Total\s+528\.5k\s+181\.2k\s+34\.3%$/m);
+    expect(text).toContain('Venta: 528,462 CUP');
+    expect(text).toContain('Costo de lo vendido: 347,234 CUP');
+    expect(text).toContain('Utilidad bruta: 181,229 CUP');
     expect(text).toContain('Utilidad neta: 181,229 CUP');
     expect(text).toContain('Margen promedio simple: 34.3% · ponderado: 34.3%');
+    // Los márgenes difieren menos de un punto: no hace falta la explicación.
+    expect(text).not.toContain('Simple: promedio');
     expect(text).toContain('Mejor día: 05');
     expect(text).toContain('Utilidad inflada');
   });
@@ -87,7 +95,8 @@ describe('período (cuadre real 01–05)', () => {
   it('/semana y /rango', async () => {
     expect(body(await weekReport(deps))).toContain('Últimos 7 días (pestañas 01–05 · 5 días)');
     const range = body(await rangeReport(deps, '02 03'));
-    expect(range).toMatch(/^Total\s+191,076/m);
+    expect(range).toMatch(/^Total\s+191\.1k/m);
+    expect(range).toContain('Venta: 191,076 CUP');
     expect(body(await rangeReport(deps, ''))).toContain('Uso: /rango');
     expect(body(await rangeReport(deps, '02 09'))).toContain('No existe la pestaña 09');
   });
@@ -121,7 +130,7 @@ describe('gastos, inversión y ganancia', () => {
   it('/inversion recalcula desde las filas (la 04 guarda 9,625 menos en Q2)', async () => {
     const text = body(await inventoryReport(deps, '03 04'));
     // Recalculado: inicial del 04 = final del 03 = 597,262; la hoja guarda 587,636.5.
-    expect(text).toMatch(/^04\s+597,262/m);
+    expect(text).toMatch(/^04\s+597\.3k/m);
     expect(text).not.toContain('no continúa');
   });
 
@@ -153,16 +162,16 @@ describe('/fila', () => {
     const text = body(await rowReport(deps, 'arroz 02'));
     expect(text).toContain('arroz · pestaña 02 · fila 6');
     // inicio 5 + entradas 4 − final 7 = 2 vendidos a 950 con costo 659.
-    expect(text).toMatch(/^I\s+Salida\s+2$/m);
-    expect(text).toMatch(/^K\s+Venta Bruta\s+1,900$/m);
-    expect(text).toMatch(/^L\s+Costo Final\s+1,318$/m);
-    expect(text).toMatch(/^N\s+Utilidad\s+582$/m);
+    expect(text).toMatch(/^I · Salida: 2$/m);
+    expect(text).toMatch(/^K · Venta Bruta: 1,900$/m);
+    expect(text).toMatch(/^L · Costo Final: 1,318$/m);
+    expect(text).toMatch(/^N · Utilidad: 582$/m);
     expect(text).toContain('coincide con lo guardado');
   });
 
   it('mantequilla Soya 04: marca el 0 escrito a mano en C60', async () => {
     const text = body(await rowReport(deps, 'mantequilla soya 4'));
-    expect(text).toMatch(/^C\s+Invs inicial\s+9,625\s+≠ 0$/m);
+    expect(text).toMatch(/^C · Invs inicial: 9,625 ⚠️ hoja: 0$/m);
     expect(text).toContain('La hoja guarda otro valor en C60');
   });
 
@@ -213,5 +222,43 @@ describe('/producto', () => {
     if (result.kind !== REPORT_KIND.CHOOSE) return;
     const text = body(await completeProductRequest(deps, result.request, 'mayonesa cepera'));
     expect(text).toContain('mayonesa cepera (pestañas 01–03 · 3 días)');
+  });
+});
+
+describe('ancho de las tablas (teléfono)', () => {
+  it(`ninguna línea de una tabla pasa de ${String(MAX_TABLE_WIDTH)} caracteres`, async () => {
+    const reports: [string, Promise<ReportResult>][] = [
+      ['/mes', monthReport(deps)],
+      ['/semana', weekReport(deps)],
+      ['/rango 01 05', rangeReport(deps, '01 05')],
+      ['/gastos', expensesReport(deps, '')],
+      ['/inversion', inventoryReport(deps, '')],
+      ['/ganancia', profitReport(deps)],
+      ['/top 20 venta', topReport(deps, '20 venta')],
+      ['/top 20 unidades', topReport(deps, '20 unidades')],
+      ['/margen', marginsReport(deps, '')],
+      ['/dia 03', dayReport(deps, '03')],
+      ['/hoy', todayReport(deps, '03')],
+      ['/fila mantequilla soya 04', rowReport(deps, 'mantequilla soya 04')],
+      ['/producto pollo', productReport(deps, 'pollo')],
+      ['/producto arroz', productReport(deps, 'arroz')],
+    ];
+    for (const [name, pending] of reports) {
+      const result = await pending;
+      if (result.kind !== REPORT_KIND.TEXT) throw new Error(`${name}: se esperaba texto`);
+      for (const line of result.messages.flatMap(preLines)) {
+        expect(line.length, `${name}: "${line}"`).toBeLessThanOrEqual(MAX_TABLE_WIDTH);
+      }
+    }
+  });
+});
+
+describe('explicación de los márgenes', () => {
+  it('solo cuando el simple y el ponderado difieren en más de un punto', () => {
+    const period = summarizePeriod(sheets.map(summarizeDay));
+    expect(marginsDiffer(period)).toBe(false);
+    expect(marginsDiffer({ ...period, margenSimple: 0.4, margenPonderado: 0.3 })).toBe(true);
+    expect(marginsDiffer({ ...period, margenSimple: 0.305, margenPonderado: 0.3 })).toBe(false);
+    expect(marginsDiffer({ ...period, margenSimple: null })).toBe(false);
   });
 });
