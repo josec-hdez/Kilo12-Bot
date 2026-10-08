@@ -43,6 +43,10 @@ function readRow(row: ExcelJS.Row): CuadreRow {
     final: cellNumber(at('J')),
     salida: cellNumber(at('I')),
     ventaBruta: cellNumber(at('K')),
+    invsInicial: cellNumber(at('C')),
+    costoFinal: cellNumber(at('L')),
+    invsFinal: cellNumber(at('M')),
+    utilidad: cellNumber(at('N')),
     formulas: {
       C: cellFormula(at('C')),
       I: cellFormula(at('I')),

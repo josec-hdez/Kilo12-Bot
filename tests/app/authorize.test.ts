@@ -23,6 +23,15 @@ beforeEach(() => {
 const deps = () => ({ users, accessLog });
 
 describe('authorize', () => {
+  it('reporte pedido por un dependiente: mensaje propio y queda en el log', () => {
+    const result = authorize(deps(), { telegramId: 2, username: null, command: '/mes' });
+    expect(result).toMatchObject({
+      status: AUTH_STATUS.FORBIDDEN,
+      message: expect.stringContaining('No autorizado para reportes') as unknown,
+    });
+    expect(accessLog.list()).toMatchObject([{ telegramId: 2, command: '/mes' }]);
+  });
+
   it('fuera de la whitelist: "no autorizado" y queda en el log', () => {
     const result = authorize(deps(), { telegramId: 99, username: 'intruso', command: '/hoy' });
     expect(result).toEqual({ status: AUTH_STATUS.UNAUTHORIZED, message: 'No autorizado.' });

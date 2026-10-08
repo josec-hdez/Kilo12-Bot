@@ -46,6 +46,7 @@ beforeAll(async () => {
 interface SentMessage {
   chatId: number;
   text: string;
+  parseMode: string | undefined;
   /** callback_data de los botones, si el mensaje los trae. */
   buttons: string[];
 }
@@ -137,6 +138,7 @@ beforeEach(async () => {
       sent.push({
         chatId: body.chat_id as number,
         text: body.text as string,
+        parseMode: body.parse_mode as string | undefined,
         buttons: buttonsOf(body),
       });
       return Promise.resolve({
@@ -415,7 +417,14 @@ describe('/validar, /ayuda y texto libre', () => {
   it('texto libre → menú de botones del rol (sin IA)', async () => {
     await text(PARTNER, '¿cuánto vendimos ayer?');
     expect(last().text).toBe(FREE_TEXT_REPLY);
-    expect(last().buttons).toEqual(['menu:validar', 'menu:ayuda']);
+    expect(last().buttons).toEqual([
+      'menu:validar',
+      'menu:hoy',
+      'menu:mes',
+      'menu:semana',
+      'menu:ganancia',
+      'menu:ayuda',
+    ]);
     await click(PARTNER, 'menu:validar');
     expect(last().text).toContain('🔎 Validación del cuadre: 05');
   });
@@ -427,10 +436,72 @@ describe('/validar, /ayuda y texto libre', () => {
   });
 
   it('comando que todavía no existe', async () => {
-    await text(CLERK, '/hoy');
+    await text(CLERK, '/comparar 04');
     expect(last().text).toContain('Tu rol no permite');
-    await text(OWNER, '/hoy');
+    await text(OWNER, '/comparar 04');
     expect(last().text).toBe(BOT_TEXT.UNKNOWN_COMMAND);
+  });
+});
+
+describe('reportes', () => {
+  it('/mes: tabla en HTML con <pre> y la suma de la utilidad', async () => {
+    await text(OWNER, '/mes');
+    const message = last();
+    expect(message.parseMode).toBe('HTML');
+    expect(message.text).toContain('<pre>');
+    expect(message.text).toMatch(/Total\s+528,462\s+347,234\s+181,229/);
+    expect(message.text).toContain('Margen promedio simple');
+  });
+
+  it('el socio ve reportes; el dependiente recibe "No autorizado para reportes"', async () => {
+    await text(PARTNER, '/ganancia');
+    expect(last().text).toContain('Ganancia acumulada');
+    await text(CLERK, '/mes');
+    expect(last().text).toContain('No autorizado para reportes');
+    await text(CLERK, '/producto pollo');
+    expect(last().text).toContain('No autorizado para reportes');
+    expect(accessLog.list()).toMatchObject([
+      { telegramId: CLERK, command: '/mes', outcome: 'forbidden' },
+      { telegramId: CLERK, command: '/producto', outcome: 'forbidden' },
+    ]);
+  });
+
+  it('/fila y /dia con argumentos', async () => {
+    await text(OWNER, '/fila mantequilla soya 04');
+    expect(last().text).toContain('La hoja guarda otro valor en C60');
+    await text(OWNER, '/dia 02');
+    expect(last().text).toContain('pestaña 02 · TC 775');
+    await text(OWNER, '/rango');
+    expect(last().text).toContain('Uso: /rango');
+  });
+
+  it('/hoy usa la pestaña del día en La Habana (o el último día cargado)', async () => {
+    await text(OWNER, '/hoy');
+    const all = sent.map((m) => m.text).join('\n');
+    // El reloj de la prueba es el 3 oct en La Habana y existe la pestaña 03.
+    expect(all).toContain('<b>Hoy</b> · pestaña 03');
+  });
+
+  it('nombre ambiguo: botones para elegir; solo quien preguntó puede elegir', async () => {
+    await text(OWNER, '/producto mayonesa');
+    expect(last().text).toContain('coincide con varios productos');
+    const choice = button('prod');
+    await click(PARTNER, choice);
+    expect(last().text).toBe(BOT_TEXT.CHOICE_EXPIRED);
+    await click(OWNER, choice);
+    expect(last().text).toContain('<b>mayonesa cepera</b>');
+    expect(edits).toBeGreaterThan(0);
+  });
+
+  it('el dependiente no puede usar un botón de producto', async () => {
+    await text(OWNER, '/producto mayonesa');
+    await click(CLERK, button('prod'));
+    expect(answers[answers.length - 1]?.text).toContain('No autorizado para reportes');
+  });
+
+  it('botón del menú: 📅 Mes', async () => {
+    await click(OWNER, 'menu:mes');
+    expect(last().text).toContain('<b>Mes</b>');
   });
 });
 
