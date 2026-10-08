@@ -119,5 +119,6 @@ export function asCuadreReader(source: CuadreSource): CuadreReader {
   return {
     listDays: () => Promise.resolve(source.listDays()),
     readDay: (tabName) => Promise.resolve(source.readDay(tabName)),
+    readDays: (tabNames) => Promise.resolve(tabNames.map((tabName) => source.readDay(tabName))),
   };
 }
