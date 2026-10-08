@@ -1,5 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { cup, esc, packMessages, pct, qty, table, usd } from '../../src/app/report-format.js';
+import {
+  ALIGN,
+  compact,
+  cup,
+  esc,
+  MAX_TABLE_WIDTH,
+  packMessages,
+  pct,
+  preLines,
+  qty,
+  table,
+  usd,
+} from '../../src/app/report-format.js';
 
 describe('cifras', () => {
   it('CUP redondeado con miles, USD con dos decimales, % con uno', () => {
@@ -28,7 +40,39 @@ describe('table', () => {
         ],
       ),
     ).toBe('<pre>Día     Venta\n01     78,140\nTotal 528,462</pre>');
-    expect(table(['P'], [['cigarro popular de bodega x']])).toContain('cigarro popular de …');
+    expect(table(['P', 'Venta'], [['cigarro popular de bodega x', '51.0k']])).toBe(
+      '<pre>P                        Venta\ncigarro popular de bode… 51.0k</pre>',
+    );
+  });
+
+  it(`recorta la columna de texto para no pasar de ${String(MAX_TABLE_WIDTH)} caracteres`, () => {
+    const html = table(
+      ['#', 'Producto', 'Venta', 'Marg'],
+      [['1', 'refresco reenvasado de naranja', '19.0k', '25.0%']],
+      [ALIGN.RIGHT, ALIGN.LEFT],
+    );
+    const lines = preLines(html);
+    expect(lines).toEqual(['# Producto         Venta  Marg', '1 refresco reenva… 19.0k 25.0%']);
+    for (const line of lines) expect(line.length).toBeLessThanOrEqual(MAX_TABLE_WIDTH);
+  });
+
+  it('una tabla de solo números que no cabe no se recorta (lo detectan las pruebas)', () => {
+    const lines = preLines(
+      table(['A', 'B'], [['1'.repeat(20), '2'.repeat(20)]], [ALIGN.RIGHT, ALIGN.RIGHT]),
+    );
+    expect(lines[1]).toBe(`${'1'.repeat(20)} ${'2'.repeat(20)}`);
+  });
+});
+
+describe('compact', () => {
+  it('cifras cortas para las tablas', () => {
+    expect(compact(850)).toBe('850');
+    expect(compact(78_140)).toBe('78.1k');
+    expect(compact(132_796)).toBe('132.8k');
+    expect(compact(-43_902)).toBe('-43.9k');
+    expect(compact(1_234_567)).toBe('1.2M');
+    expect(compact(999_960)).toBe('1.0M');
+    expect(compact(0)).toBe('0');
   });
 });
 
