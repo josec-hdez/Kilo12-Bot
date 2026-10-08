@@ -7,7 +7,6 @@ import {
   type FindingCode,
   type Severity,
 } from '../core/validations.js';
-import type { CuadreSheet } from '../core/types.js';
 import type { CuadreReader } from '../ports/cuadre-source.js';
 
 /** /validar [día|semana]: corre las validaciones T3 sobre el cuadre y arma el texto. */
@@ -130,8 +129,7 @@ export async function runValidation(
   const window = windowFor(await reader.listDays(), request);
   if (typeof window === 'string') return window;
 
-  const sheets: CuadreSheet[] = [];
-  for (const day of window.read) sheets.push(await reader.readDay(day));
+  const sheets = await reader.readDays(window.read);
 
   const targets = new Set(window.target.map((day) => day.trim()));
   const all = validateDays(sheets, { hasFixedExpenses: options.hasFixedExpenses }).filter(
