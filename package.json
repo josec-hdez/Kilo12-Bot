@@ -1,10 +1,42 @@
 {
-  "name": "Kilo12Bot",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+  "name": "kilo12-bot",
+  "version": "0.1.0",
+  "description": "Bot de Telegram de operaciones y finanzas de Kilo 12",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
   },
-  "private": true
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "start": "node dist/main.js",
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:generate": "drizzle-kit generate"
+  },
+  "dependencies": {
+    "@googleapis/sheets": "18.1.1",
+    "better-sqlite3": "13.0.3",
+    "drizzle-orm": "0.45.3",
+    "exceljs": "4.4.0",
+    "fastest-levenshtein": "1.0.16",
+    "grammy": "1.46.0",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/better-sqlite3": "9.6.0",
+    "@types/node": "26.6.4",
+    "drizzle-kit": "0.31.11",
+    "eslint": "10.12.0",
+    "prettier": "3.9.9",
+    "tsx": "4.23.15",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.71.1",
+    "vitest": "5.0.3"
+  }
 }

@@ -1,0 +1,7 @@
+dist/
+coverage/
+data/
+tests/fixtures/
+CLAUDE.md
+# Generado por drizzle-kit
+drizzle/meta/
