@@ -31,6 +31,7 @@ import {
   type ReportDeps,
   type ReportResult,
 } from '../../app/reports.js';
+import { esc } from '../../app/report-format.js';
 import { prepareSetTc } from '../../app/set-tc.js';
 import { todayIn } from '../../app/today.js';
 import { prepareUndo } from '../../app/undo.js';
@@ -80,6 +81,25 @@ export interface CreateBotOptions {
 const CONVERSATION_TTL_MS = 15 * 60 * 1000;
 const TELEGRAM_MAX_TEXT = 4096;
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
+/** Telegram muestra "escribiendo…" unos 5 s: se repite antes de que se apague. */
+const TYPING_EVERY_MS = 4_000;
+
+/** Lo que se muestra al instante mientras se calcula cada reporte. */
+const REPORT_PLACEHOLDER: Readonly<Record<string, string>> = {
+  hoy: '⏳ Calculando el día de hoy…',
+  dia: '⏳ Calculando el día…',
+  semana: '⏳ Calculando los últimos 7 días…',
+  mes: '⏳ Calculando el mes…',
+  rango: '⏳ Calculando el rango…',
+  gastos: '⏳ Sumando los gastos…',
+  inversion: '⏳ Calculando la inversión…',
+  ganancia: '⏳ Calculando la ganancia acumulada…',
+  top: '⏳ Armando el ranking…',
+  margen: '⏳ Calculando los márgenes…',
+  fila: '⏳ Buscando la fila…',
+  producto: '⏳ Sumando el producto en todas las hojas…',
+};
+const DEFAULT_PLACEHOLDER = '⏳ Calculando…';
 
 export const BOT_TEXT = {
   ASK_IPV_FILE:
@@ -98,6 +118,7 @@ export const BOT_TEXT = {
   UNKNOWN_COMMAND: 'Ese comando todavía no está disponible. Usa /ayuda.',
   CHOICE_EXPIRED: 'Esa elección ya venció (15 minutos). Repite el comando.',
   GENERIC_ERROR: '⚠️ Algo falló procesando el mensaje. No se escribió nada. Inténtalo de nuevo.',
+  REPORT_ERROR: '⚠️ No pude generar el reporte',
 } as const;
 
 /** Parte un texto largo en mensajes de Telegram, cortando por líneas. */
@@ -117,10 +138,26 @@ export function splitMessage(text: string, max = TELEGRAM_MAX_TEXT): string[] {
   return chunks;
 }
 
-/** Mensajes HTML ya partidos (reportes): las tablas van en <pre>. */
-async function replyHtml(ctx: BotContext, messages: readonly string[]): Promise<void> {
-  for (const message of messages) await ctx.reply(message, { parse_mode: 'HTML' });
+/**
+ * Muestra "escribiendo…" en el chat hasta que termina `work`: los reportes y las
+ * lecturas de la hoja tardan unos segundos y sin esto parece que el bot no hace nada.
+ */
+export async function withTyping<T>(ctx: BotContext, work: () => Promise<T>): Promise<T> {
+  const send = () => {
+    // Si falla el aviso, el trabajo sigue: es solo una señal visual.
+    ctx.replyWithChatAction('typing').catch(() => undefined);
+  };
+  send();
+  const handle = setInterval(send, TYPING_EVERY_MS);
+  try {
+    return await work();
+  } finally {
+    clearInterval(handle);
+  }
 }
+
+/** Reemplaza el texto del mensaje "⏳ Calculando…" por el primer mensaje del resultado. */
+type EditPlaceholder = (text: string, keyboard?: InlineKeyboard) => Promise<void>;
 
 async function replyLong(ctx: BotContext, text: string, keyboard?: InlineKeyboard): Promise<void> {
   const chunks = splitMessage(text);
@@ -233,7 +270,10 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
 
   async function loadDay(ctx: BotContext, source: IpvSource, ref: DayRef): Promise<void> {
     const ipv = source.readDay(ref);
-    await showPrepared(ctx, await prepareIpvLoad(deps.pipeline, actorOf(ctx), { ipv, tc: null }));
+    const prepared = await withTyping(ctx, () =>
+      prepareIpvLoad(deps.pipeline, actorOf(ctx), { ipv, tc: null }),
+    );
+    await showPrepared(ctx, prepared);
   }
 
   async function removeKeyboard(ctx: BotContext): Promise<void> {
@@ -246,10 +286,12 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
 
   async function validate(ctx: BotContext, args: string): Promise<void> {
     const request = parseValidateArgs(args);
-    const text = await runValidation(deps.cuadre, request, {
-      hasFixedExpenses: deps.settings.get(SETTING.HAS_FIXED_EXPENSES) === true,
-      showFinancials: can(actorOf(ctx).role, PERMISSION.VIEW_FINANCIALS),
-    });
+    const text = await withTyping(ctx, () =>
+      runValidation(deps.cuadre, request, {
+        hasFixedExpenses: deps.settings.get(SETTING.HAS_FIXED_EXPENSES) === true,
+        showFinancials: can(actorOf(ctx).role, PERMISSION.VIEW_FINANCIALS),
+      }),
+    );
     await replyLong(ctx, text);
   }
 
@@ -267,9 +309,22 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
     };
   }
 
-  async function showReport(ctx: BotContext, result: ReportResult): Promise<void> {
+  /**
+   * Muestra el resultado de un reporte. Si hay un mensaje "⏳ Calculando…", el primer
+   * mensaje lo reemplaza y los demás llegan como mensajes nuevos.
+   */
+  async function showReport(
+    ctx: BotContext,
+    result: ReportResult,
+    editPlaceholder?: EditPlaceholder,
+  ): Promise<void> {
     if (result.kind === REPORT_KIND.TEXT) {
-      await replyHtml(ctx, result.messages);
+      const [first, ...rest] = result.messages;
+      if (first !== undefined) {
+        if (editPlaceholder === undefined) await ctx.reply(first, { parse_mode: 'HTML' });
+        else await editPlaceholder(first);
+      }
+      for (const message of rest) await ctx.reply(message, { parse_mode: 'HTML' });
       return;
     }
     const choiceId = productChoices.add({
@@ -277,9 +332,37 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
       request: result.request,
       options: result.options,
     });
-    await ctx.reply(result.prompt, {
-      reply_markup: productChoiceKeyboard(choiceId, result.options),
-    });
+    const keyboard = productChoiceKeyboard(choiceId, result.options);
+    if (editPlaceholder === undefined) await ctx.reply(result.prompt, { reply_markup: keyboard });
+    else await editPlaceholder(esc(result.prompt), keyboard);
+  }
+
+  /**
+   * Envía "⏳ Calculando…" al instante, muestra "escribiendo…" mientras se calcula y
+   * después reemplaza ese mensaje por el reporte (o por el error).
+   */
+  async function runReport(
+    ctx: BotContext,
+    command: string,
+    run: () => Promise<ReportResult>,
+  ): Promise<void> {
+    const placeholder = await ctx.reply(REPORT_PLACEHOLDER[command] ?? DEFAULT_PLACEHOLDER);
+    const edit: EditPlaceholder = async (text, keyboard) => {
+      await ctx.api.editMessageText(placeholder.chat.id, placeholder.message_id, text, {
+        parse_mode: 'HTML',
+        ...(keyboard === undefined ? {} : { reply_markup: keyboard }),
+      });
+    };
+    let result: ReportResult;
+    try {
+      result = await withTyping(ctx, run);
+    } catch (error) {
+      console.error(`Error generando /${command}:`, error);
+      const reason = error instanceof Error ? error.message : String(error);
+      await edit(esc(`${BOT_TEXT.REPORT_ERROR}: ${reason}`));
+      return;
+    }
+    await showReport(ctx, result, edit);
   }
 
   const todayTab = () => dayTab(todayIn(clock(), deps.timezone));
@@ -305,7 +388,9 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
     }
     let source: IpvSource;
     try {
-      source = await ExcelIpvSource.fromBuffer(await download(document.file_id));
+      source = await withTyping(ctx, async () =>
+        ExcelIpvSource.fromBuffer(await download(document.file_id)),
+      );
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       await ctx.reply(`No pude leer el archivo como IPV: ${reason}`);
@@ -383,14 +468,17 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
   };
   for (const [command, run] of Object.entries(reports)) {
     bot.command(command, async (ctx) => {
-      await showReport(ctx, await run(ctx.match));
+      await runReport(ctx, command, () => run(ctx.match));
     });
   }
 
   // ------------------------------------------------------------ botones
   bot.callbackQuery(new RegExp(`^${CALLBACK.CONFIRM}:(.+)$`), async (ctx) => {
     const pendingId = ctx.match[1] ?? '';
-    const result = await confirmPending(deps.pipeline, actorOf(ctx), { pendingId });
+    // Confirmar escribe en la hoja: puede tardar unos segundos.
+    const result = await withTyping(ctx, () =>
+      confirmPending(deps.pipeline, actorOf(ctx), { pendingId }),
+    );
     await ctx.answerCallbackQuery();
     // Con bloqueos la acción sigue pendiente: se dejan los botones.
     if (result.status !== CONFIRM_STATUS.BLOCKED) await removeKeyboard(ctx);
@@ -442,7 +530,9 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
       return;
     }
     await removeKeyboard(ctx);
-    await showReport(ctx, await completeProductRequest(reportDeps(), choice.request, product));
+    await runReport(ctx, choice.request.command, () =>
+      completeProductRequest(reportDeps(), choice.request, product),
+    );
   });
 
   bot.callbackQuery(new RegExp(`^${CALLBACK.MENU}:(\\w+)$`), async (ctx) => {
@@ -450,7 +540,7 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
     const command = ctx.match[1] ?? '';
     const report = Object.hasOwn(reports, command) ? reports[command] : undefined;
     if (report !== undefined) {
-      await showReport(ctx, await report(''));
+      await runReport(ctx, command, () => report(''));
       return;
     }
     switch (command) {
@@ -485,10 +575,12 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
     const key = String(actor.telegramId);
     const waiting = awaitingReason.get(key);
     if (waiting !== undefined) {
-      const result = await confirmPending(deps.pipeline, actor, {
-        pendingId: waiting.pendingId,
-        forceReason: ctx.message.text,
-      });
+      const result = await withTyping(ctx, () =>
+        confirmPending(deps.pipeline, actor, {
+          pendingId: waiting.pendingId,
+          forceReason: ctx.message.text,
+        }),
+      );
       if (result.status !== CONFIRM_STATUS.REASON_REQUIRED) awaitingReason.delete(key);
       await ctx.reply(result.message);
       return;
