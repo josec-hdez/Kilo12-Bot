@@ -13,6 +13,7 @@ import {
   type CellValue,
   type Grid,
   type SheetsGateway,
+  type TabRange,
 } from '../../ports/sheets-gateway.js';
 
 const DAY_TAB_PATTERN = /^\d{1,2}$/;
@@ -115,9 +116,37 @@ function assertHeaders(tab: string, formulas: Grid): void {
   });
 }
 
+/** Rangos que se leen de cada pestaña de día: las filas A:N y el resumen P:Q. */
+export const DAY_RANGES_PER_TAB = 2;
+
+export function dayRanges(tab: string): TabRange[] {
+  return [
+    { tab, a1: ROWS_A1 },
+    { tab, a1: SUMMARY_A1 },
+  ];
+}
+
+function parseDay(
+  tab: string,
+  rowFormulas: Grid,
+  summaryFormulas: Grid,
+  rowValues: Grid,
+  summaryValues: Grid,
+): CuadreSheet {
+  assertHeaders(tab, rowFormulas);
+  const rows: CuadreRow[] = [];
+  for (let index = FIRST_DATA_ROW - 1; index < rowFormulas.length; index++) {
+    const row = readRow(rowFormulas, rowValues, index);
+    if (row.product !== '') rows.push(row);
+  }
+  const summary = readSummary(summaryFormulas, summaryValues);
+  return { tabName: tab, rows, summary, tc: tcFromSummary(summary) };
+}
+
 /**
- * Lee el cuadre desde la hoja (Google Sheets o la simulada). Dos lecturas por día:
- * con fórmulas (para validarlas) y con valores (para las cantidades y el resumen).
+ * Lee el cuadre desde la hoja (Google Sheets o la simulada). Cualquier cantidad de
+ * días se lee con dos llamadas a la API: una con fórmulas (para validarlas) y otra
+ * con valores (para las cantidades y el resumen), cada una con todos los rangos.
  */
 export class SheetsCuadreReader implements CuadreReader {
   constructor(private readonly sheets: SheetsGateway) {}
@@ -131,28 +160,27 @@ export class SheetsCuadreReader implements CuadreReader {
   }
 
   async readDay(tabName: string): Promise<CuadreSheet> {
-    const tabs = await this.sheets.listTabs();
-    const tab = tabs.find((existing) => existing.title.trim() === tabName.trim())?.title;
-    if (tab === undefined)
-      throw new CuadreFormatError(`El cuadre no tiene la pestaña "${tabName}"`);
+    const [sheet] = await this.readDays([tabName]);
+    if (sheet === undefined) throw new CuadreFormatError(`No pude leer la pestaña "${tabName}"`);
+    return sheet;
+  }
 
-    const ranges = [
-      { tab, a1: ROWS_A1 },
-      { tab, a1: SUMMARY_A1 },
-    ];
-    const [rowFormulas = [], summaryFormulas = []] = await this.sheets.readRanges(
-      ranges,
-      RENDER.FORMULA,
-    );
-    const [rowValues = [], summaryValues = []] = await this.sheets.readRanges(ranges, RENDER.VALUE);
-    assertHeaders(tab, rowFormulas);
+  async readDays(tabNames: readonly string[]): Promise<CuadreSheet[]> {
+    if (tabNames.length === 0) return [];
+    const titles = (await this.sheets.listTabs()).map((tab) => tab.title);
+    const tabs = tabNames.map((name) => {
+      const tab = titles.find((title) => title.trim() === name.trim());
+      if (tab === undefined) throw new CuadreFormatError(`El cuadre no tiene la pestaña "${name}"`);
+      return tab;
+    });
 
-    const rows: CuadreRow[] = [];
-    for (let index = FIRST_DATA_ROW - 1; index < rowFormulas.length; index++) {
-      const row = readRow(rowFormulas, rowValues, index);
-      if (row.product !== '') rows.push(row);
-    }
-    const summary = readSummary(summaryFormulas, summaryValues);
-    return { tabName: tab, rows, summary, tc: tcFromSummary(summary) };
+    const ranges = tabs.flatMap(dayRanges);
+    const formulas = await this.sheets.readRanges(ranges, RENDER.FORMULA);
+    const values = await this.sheets.readRanges(ranges, RENDER.VALUE);
+    return tabs.map((tab, i) => {
+      const grid = (grids: Grid[], offset: number): Grid =>
+        grids[i * DAY_RANGES_PER_TAB + offset] ?? [];
+      return parseDay(tab, grid(formulas, 0), grid(formulas, 1), grid(values, 0), grid(values, 1));
+    });
   }
 }
