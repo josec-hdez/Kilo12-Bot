@@ -26,6 +26,10 @@ function row(rowNumber: number, overrides: Partial<CuadreRow>): CuadreRow {
     final: 10,
     salida: null,
     ventaBruta: null,
+    invsInicial: null,
+    costoFinal: null,
+    invsFinal: null,
+    utilidad: null,
     formulas: {
       C: stripEq(f.C),
       I: stripEq(f.I),
