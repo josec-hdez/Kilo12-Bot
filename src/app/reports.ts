@@ -33,7 +33,7 @@ import { normalizeName } from '../core/tabs.js';
 import type { CuadreSheet } from '../core/types.js';
 import { SEVERITY, validateDays, type Severity } from '../core/validations.js';
 import type { CuadreReader } from '../ports/cuadre-source.js';
-import { ALIGN, cup, esc, packMessages, pct, qty, table, usd } from './report-format.js';
+import { ALIGN, compact, cup, esc, packMessages, pct, qty, table, usd } from './report-format.js';
 
 /**
  * Reportes del cuadre para Telegram (/mes, /semana, /rango, /dia, /hoy, /gastos,
@@ -78,6 +78,13 @@ export interface ChooseProduct {
 export type ReportResult = TextReport | ChooseProduct;
 
 const WEEK_DAYS = 7;
+/** Productos del top con su detalle exacto debajo de la tabla. */
+const TOP_DETAIL = 3;
+const TOP_HEADER: Readonly<Record<TopMetric, string>> = {
+  [TOP_METRIC.VENTA]: 'Venta',
+  [TOP_METRIC.UTILIDAD]: 'Util',
+  [TOP_METRIC.UNIDADES]: 'Unid',
+};
 const DAY_TOP = 5;
 const MARGIN_LIST = 10;
 
@@ -96,10 +103,9 @@ export function monthDays(days: readonly string[]): string[] {
   return [...days];
 }
 
-async function readSheets(reader: CuadreReader, days: readonly string[]): Promise<CuadreSheet[]> {
-  const sheets: CuadreSheet[] = [];
-  for (const day of days) sheets.push(await reader.readDay(day));
-  return sheets;
+/** Todos los días de una vez: en Google Sheets son dos llamadas, no dos por día. */
+function readSheets(reader: CuadreReader, days: readonly string[]): Promise<CuadreSheet[]> {
+  return reader.readDays(days);
 }
 
 function spanLabel(days: readonly string[]): string {
@@ -147,25 +153,31 @@ function periodNotes(period: PeriodSummary): string {
 
 const MARGIN_EXPLANATION =
   '<i>Simple: promedio de los % diarios (cada día pesa igual). Ponderado: Σ utilidad bruta ÷ Σ venta (pesan más los días que más venden).</i>';
+/** La explicación solo aporta cuando los dos márgenes cuentan historias distintas. */
+const MARGIN_GAP_TO_EXPLAIN = 0.01;
+
+export function marginsDiffer(period: PeriodSummary): boolean {
+  const { margenSimple, margenPonderado } = period;
+  return (
+    margenSimple !== null &&
+    margenPonderado !== null &&
+    Math.abs(margenSimple - margenPonderado) > MARGIN_GAP_TO_EXPLAIN
+  );
+}
 
 function periodReport(title: string, days: readonly string[], period: PeriodSummary): TextReport {
+  // Cuatro columnas cortas para que quepa en el teléfono; los montos exactos van abajo.
   const rows = period.days.map((d) => [
     d.day,
-    cup(d.venta),
-    cup(d.costo),
-    cup(d.utilidadBruta),
+    compact(d.venta),
+    compact(d.utilidadNeta),
     pct(d.margen),
-    cup(d.gastos.total),
-    cup(d.utilidadNeta),
   ]);
   rows.push([
     'Total',
-    cup(period.venta),
-    cup(period.costo),
-    cup(period.utilidadBruta),
+    compact(period.venta),
+    compact(period.utilidadNeta),
     pct(period.margenPonderado),
-    cup(period.gastos),
-    cup(period.utilidadNeta),
   ]);
 
   const count = period.days.length;
@@ -178,8 +190,8 @@ function periodReport(title: string, days: readonly string[], period: PeriodSumm
     `Utilidad neta: <b>${cup(period.utilidadNeta)} CUP</b> (USD ${usd(period.usd.utilidadNeta)})`,
     `Promedio diario: venta ${average(period.venta)} · utilidad neta ${average(period.utilidadNeta)} CUP`,
     `Margen promedio simple: <b>${pct(period.margenSimple)}</b> · ponderado: <b>${pct(period.margenPonderado)}</b>`,
-    MARGIN_EXPLANATION,
   ];
+  if (marginsDiffer(period)) summary.push(MARGIN_EXPLANATION);
   if (period.best !== null && period.worst !== null && count > 1) {
     summary.push(
       `Mejor día: ${period.best.day} (${cup(period.best.utilidadNeta)} neto) · peor: ${period.worst.day} (${cup(period.worst.utilidadNeta)})`,
@@ -188,7 +200,8 @@ function periodReport(title: string, days: readonly string[], period: PeriodSumm
 
   return text(
     `📅 <b>${esc(title)}</b> (${spanLabel(days)})`,
-    table(['Día', 'Venta', 'Costo', 'U.Bruta', 'Marg', 'Gastos', 'U.Neta'], rows),
+    table(['Día', 'Venta', 'Neta', 'Marg'], rows),
+    '<i>Neta = utilidad bruta − gastos. Marg = margen bruto.</i>',
     summary.join('\n'),
     periodNotes(period),
   );
@@ -233,6 +246,7 @@ function topTable(products: readonly ProductAggregate[], metric: TopMetric): str
   return table(
     ['Producto', metric === TOP_METRIC.VENTA ? 'Venta' : 'Utilidad'],
     products.map((p) => [`${p.missingCost ? '*' : ''}${p.product}`, cup(p[metric])]),
+    [ALIGN.LEFT, ALIGN.RIGHT],
   );
 }
 
@@ -334,10 +348,10 @@ export async function expensesReport(deps: ReportDeps, raw: string): Promise<Rep
 
   const rows = period.days.map((d) => [
     d.day,
-    d.gastos.found ? cup(d.gastos.total) : '¿?',
+    d.gastos.found ? compact(d.gastos.total) : '¿?',
     d.gastos.items.map((i) => i.concept).join(', ') || (d.gastos.found ? '—' : 'sin sección'),
   ]);
-  rows.push(['Total', cup(period.gastos), '']);
+  rows.push(['Total', compact(period.gastos), '']);
 
   const concepts = new Map<string, number>();
   for (const item of period.days.flatMap((d) => d.gastos.items)) {
@@ -350,7 +364,7 @@ export async function expensesReport(deps: ReportDeps, raw: string): Promise<Rep
     .join('\n');
 
   return text(
-    `💸 <b>Gastos</b> (${spanLabel(selected.days)})`,
+    `💸 <b>Gastos</b> (${spanLabel(selected.days)}) · total <b>${cup(period.gastos)} CUP</b>`,
     table(['Día', 'Gastos', 'Concepto'], rows, [ALIGN.LEFT, ALIGN.RIGHT, ALIGN.LEFT]),
     period.gastos === 0
       ? 'No hay gastos registrados en "Otros Gastos" en este período.'
@@ -370,11 +384,9 @@ export async function inventoryReport(deps: ReportDeps, raw: string): Promise<Re
 
   const rows = days.map((d) => [
     d.day,
-    cup(d.inversionInicial),
-    cup(d.compras),
-    cup(d.costo),
-    cup(d.inversionFinal),
-    cup(d.inversionFinal - d.inversionInicial),
+    compact(d.inversionInicial),
+    compact(d.compras),
+    compact(d.inversionFinal),
   ]);
   const first = days[0];
   const last = days[days.length - 1];
@@ -401,7 +413,7 @@ export async function inventoryReport(deps: ReportDeps, raw: string): Promise<Re
 
   return text(
     `📦 <b>Inversión</b> (${spanLabel(selected.days)}) · valorada al costo`,
-    table(['Día', 'Inicial', 'Compras', 'Vendido', 'Final', 'Cambio'], rows),
+    table(['Día', 'Inicial', 'Compras', 'Final'], rows),
     first === undefined || last === undefined
       ? ''
       : [
@@ -472,17 +484,22 @@ export async function topReport(deps: ReportDeps, raw: string): Promise<ReportRe
   return text(
     `🏆 <b>Top ${String(top.length)} por ${args.metric}</b> (${spanLabel(days)})`,
     table(
-      ['#', 'Producto', 'Unid', 'Venta', 'Utilidad', 'Marg'],
+      ['#', 'Producto', TOP_HEADER[args.metric], 'Marg'],
       top.map((p, i) => [
         String(i + 1),
         `${p.missingCost ? '*' : ''}${p.product}`,
-        qty(p.unidades),
-        cup(p.venta),
-        cup(p.utilidad),
+        args.metric === TOP_METRIC.UNIDADES ? qty(p.unidades) : compact(p[args.metric]),
         pct(p.margen),
       ]),
       [ALIGN.RIGHT, ALIGN.LEFT],
     ),
+    top
+      .slice(0, TOP_DETAIL)
+      .map(
+        (p, i) =>
+          `${String(i + 1)}. ${esc(p.product.replace(/\s+/g, ' '))}: ${qty(p.unidades)} unid · venta ${cup(p.venta)} · utilidad ${cup(p.utilidad)} CUP`,
+      )
+      .join('\n'),
     top.some((p) => p.missingCost) ? '<i>* sin costo: su utilidad es la venta completa.</i>' : '',
   );
 }
@@ -492,8 +509,8 @@ export async function marginsReport(deps: ReportDeps, raw: string): Promise<Repo
   if ('kind' in selected) return selected;
   const report = marginReport(aggregateProducts(await readSheets(deps.cuadre, selected.days)));
   const rows = (products: readonly ProductAggregate[]) =>
-    products.map((p) => [p.product, qty(p.unidades), cup(p.venta), pct(p.margen)]);
-  const header = ['Producto', 'Unid', 'Venta', 'Marg'];
+    products.map((p) => [p.product, compact(p.venta), pct(p.margen)]);
+  const header = ['Producto', 'Venta', 'Marg'];
 
   return text(
     `📐 <b>Márgenes por producto</b> (${spanLabel(selected.days)})`,
@@ -545,16 +562,14 @@ function rowReportFor(sheet: CuadreSheet, product: string): ReportResult {
 
   return text(
     `🧾 <b>${esc(report.product)}</b> · pestaña ${report.day} · fila ${String(report.rowNumber)}`,
-    table(
-      ['Col', 'Campo', 'Valor', 'Hoja'],
-      report.fields.map((f) => [
-        f.column,
-        ROW_LABEL[f.key],
-        show(f.key, f.value),
-        f.differs ? `≠ ${show(f.key, f.stored)}` : '',
-      ]),
-      [ALIGN.LEFT, ALIGN.LEFT],
-    ),
+    // Una línea por columna (no tabla): en el teléfono no se parte.
+    report.fields
+      .map(
+        (f) =>
+          `${f.column} · ${ROW_LABEL[f.key]}: <b>${show(f.key, f.value)}</b>` +
+          (f.differs ? ` ⚠️ hoja: ${show(f.key, f.stored)}` : ''),
+      )
+      .join('\n'),
     [
       `Margen: ${pct(report.margen)}`,
       `Venta: ${inUsd(report.fields.find((f) => f.key === ROW_FIELD.VENTA_BRUTA)?.value ?? 0, tc)}`,
@@ -647,32 +662,19 @@ function productReportFor(
       `Precio: ${first?.precio === null || first === undefined ? 'vacío' : cup(first.precio)} → ${last?.precio === null || last === undefined ? 'vacío' : cup(last.precio)} · costo: ${first?.costo === null || first === undefined ? 'vacío' : cup(first.costo)} → ${last?.costo === null || last === undefined ? 'vacío' : cup(last.costo)}`,
     ].join('\n'),
     table(
-      ['Día', 'Ini', 'Ent', 'Mer', 'Con', 'Vend', 'Fin', 'Venta', 'Util'],
+      ['Día', 'Vend', 'Fin', 'Venta', 'Util'],
       [
         ...totals.lines.map((l) => [
           l.day,
-          qty(l.inicio),
-          qty(l.entradas),
-          qty(l.merma),
-          qty(l.consumo),
           qty(l.unidades),
           qty(l.final),
-          cup(l.venta),
-          cup(l.utilidad),
+          compact(l.venta),
+          compact(l.utilidad),
         ]),
-        [
-          'Total',
-          '',
-          qty(totals.entradas),
-          qty(totals.merma),
-          qty(totals.consumo),
-          qty(totals.unidades),
-          '',
-          cup(totals.venta),
-          cup(totals.utilidad),
-        ],
+        ['Σ', qty(totals.unidades), '', compact(totals.venta), compact(totals.utilidad)],
       ],
     ),
+    '<i>Vend = unidades vendidas · Fin = existencia al cierre. Entradas, merma y consumo: arriba.</i>',
     [
       changes('Cambios de precio', totals.priceChanges),
       changes('Cambios de costo', totals.costChanges),
