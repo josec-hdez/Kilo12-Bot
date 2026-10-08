@@ -2,7 +2,7 @@ import { Bot, GrammyError, HttpError, InlineKeyboard, type NextFunction } from '
 import type { UserFromGetMe } from 'grammy/types';
 import { AUTH_STATUS, authorize, type AuthDeps } from '../../app/authorize.js';
 import { cancelPending, confirmPending } from '../../app/confirm.js';
-import { commandsFor, FREE_TEXT_REPLY, helpText } from '../../app/help.js';
+import { FREE_TEXT_REPLY, helpText, menuCommandsFor } from '../../app/help.js';
 import { INTAKE_STATUS, parseDayArg, resolveIpvDay } from '../../app/ipv-intake.js';
 import { dayTab, prepareIpvLoad } from '../../app/load-ipv.js';
 import {
@@ -12,11 +12,31 @@ import {
   type PipelineDeps,
   type PrepareResult,
 } from '../../app/pipeline-types.js';
+import {
+  completeProductRequest,
+  dayReport,
+  expensesReport,
+  inventoryReport,
+  marginsReport,
+  monthReport,
+  productReport,
+  profitReport,
+  rangeReport,
+  REPORT_KIND,
+  rowReport,
+  todayReport,
+  topReport,
+  weekReport,
+  type ProductRequest,
+  type ReportDeps,
+  type ReportResult,
+} from '../../app/reports.js';
 import { prepareSetTc } from '../../app/set-tc.js';
 import { todayIn } from '../../app/today.js';
 import { prepareUndo } from '../../app/undo.js';
 import { parseValidateArgs, runValidation } from '../../app/validate-report.js';
 import { can, PERMISSION } from '../../core/auth.js';
+import { buildAliasIndex } from '../../core/mapping.js';
 import { SETTING } from '../../core/settings.js';
 import type { DayRef } from '../../core/types.js';
 import type { IpvSource } from '../../ports/ipv-source.js';
@@ -25,7 +45,13 @@ import type { SettingsRepository } from '../../ports/repositories.js';
 import { ExcelIpvSource } from '../xlsx/excel-ipv-source.js';
 import type { BotContext } from './context.js';
 import { telegramFileDownloader, type FileDownloader } from './file-downloader.js';
-import { CALLBACK, confirmKeyboard, dayChoiceKeyboard, menuKeyboard } from './keyboards.js';
+import {
+  CALLBACK,
+  confirmKeyboard,
+  dayChoiceKeyboard,
+  menuKeyboard,
+  productChoiceKeyboard,
+} from './keyboards.js';
 import { TtlStore } from './ttl-store.js';
 
 /**
@@ -37,7 +63,7 @@ export interface BotDeps {
   pipeline: PipelineDeps;
   auth: AuthDeps;
   settings: SettingsRepository;
-  /** De dónde lee /validar: la hoja (real o simulada) o el .xlsx del cuadre. */
+  /** De dónde leen /validar y los reportes: la hoja (real o simulada) o el .xlsx del cuadre. */
   cuadre: CuadreReader;
   timezone: string;
   /** Descarga de archivos; por defecto, la API de Telegram. */
@@ -70,6 +96,7 @@ export const BOT_TEXT = {
   ONLY_OWNER_FORCE: 'Solo una dueña puede confirmar con bloqueos.',
   TC_USAGE: 'Uso: /tc 780 (día de hoy) o /tc 780 03 (pestaña 03).',
   UNKNOWN_COMMAND: 'Ese comando todavía no está disponible. Usa /ayuda.',
+  CHOICE_EXPIRED: 'Esa elección ya venció (15 minutos). Repite el comando.',
   GENERIC_ERROR: '⚠️ Algo falló procesando el mensaje. No se escribió nada. Inténtalo de nuevo.',
 } as const;
 
@@ -90,6 +117,11 @@ export function splitMessage(text: string, max = TELEGRAM_MAX_TEXT): string[] {
   return chunks;
 }
 
+/** Mensajes HTML ya partidos (reportes): las tablas van en <pre>. */
+async function replyHtml(ctx: BotContext, messages: readonly string[]): Promise<void> {
+  for (const message of messages) await ctx.reply(message, { parse_mode: 'HTML' });
+}
+
 async function replyLong(ctx: BotContext, text: string, keyboard?: InlineKeyboard): Promise<void> {
   const chunks = splitMessage(text);
   for (const [index, chunk] of chunks.entries()) {
@@ -106,6 +138,8 @@ function commandOf(ctx: BotContext): string | null {
   const data = ctx.callbackQuery?.data;
   if (data?.startsWith(`${CALLBACK.MENU}:`) === true)
     return `/${data.slice(CALLBACK.MENU.length + 1)}`;
+  // Elegir producto completa /fila o /producto: exige el mismo permiso.
+  if (data?.startsWith(`${CALLBACK.PRODUCT}:`) === true) return '/producto';
   return null;
 }
 
@@ -140,6 +174,12 @@ interface AwaitingReason {
   pendingId: string;
 }
 
+interface ProductChoice {
+  telegramId: number;
+  request: ProductRequest;
+  options: string[];
+}
+
 export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotContext> {
   const bot = new Bot<BotContext>(
     options.token,
@@ -148,6 +188,7 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
   const clock = deps.pipeline.clock;
   const uploads = new TtlStore<UploadedIpv>(CONVERSATION_TTL_MS, clock);
   const awaitingReason = new TtlStore<AwaitingReason>(CONVERSATION_TTL_MS, clock);
+  const productChoices = new TtlStore<ProductChoice>(CONVERSATION_TTL_MS, clock);
   const download = deps.downloadFile ?? telegramFileDownloader(bot.api, options.token);
 
   // ------------------------------------------------------------ permisos
@@ -214,8 +255,34 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
 
   async function help(ctx: BotContext): Promise<void> {
     const role = actorOf(ctx).role;
-    await ctx.reply(helpText(role), { reply_markup: menuKeyboard(commandsFor(role)) });
+    await ctx.reply(helpText(role), { reply_markup: menuKeyboard(menuCommandsFor(role)) });
   }
+
+  // Las equivalencias se leen en cada reporte: cambian con /equivalencia.
+  function reportDeps(): ReportDeps {
+    return {
+      cuadre: deps.cuadre,
+      aliases: buildAliasIndex(deps.pipeline.catalog.equivalences()),
+      hasFixedExpenses: deps.settings.get(SETTING.HAS_FIXED_EXPENSES) === true,
+    };
+  }
+
+  async function showReport(ctx: BotContext, result: ReportResult): Promise<void> {
+    if (result.kind === REPORT_KIND.TEXT) {
+      await replyHtml(ctx, result.messages);
+      return;
+    }
+    const choiceId = productChoices.add({
+      telegramId: actorOf(ctx).telegramId,
+      request: result.request,
+      options: result.options,
+    });
+    await ctx.reply(result.prompt, {
+      reply_markup: productChoiceKeyboard(choiceId, result.options),
+    });
+  }
+
+  const todayTab = () => dayTab(todayIn(clock(), deps.timezone));
 
   // ------------------------------------------------------------ IPV (documento)
   // Va antes que los comandos: un documento siempre es un IPV, tenga o no "/ipv" en el pie.
@@ -299,6 +366,27 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
     await ctx.reply(BOT_TEXT.REASON_CANCELLED);
   });
 
+  // ------------------------------------------------------------ reportes
+  const reports: Readonly<Record<string, (args: string) => Promise<ReportResult>>> = {
+    hoy: () => todayReport(reportDeps(), todayTab()),
+    dia: (args) => dayReport(reportDeps(), args),
+    semana: () => weekReport(reportDeps()),
+    mes: () => monthReport(reportDeps()),
+    rango: (args) => rangeReport(reportDeps(), args),
+    gastos: (args) => expensesReport(reportDeps(), args),
+    inversion: (args) => inventoryReport(reportDeps(), args),
+    ganancia: () => profitReport(reportDeps()),
+    top: (args) => topReport(reportDeps(), args),
+    margen: (args) => marginsReport(reportDeps(), args),
+    fila: (args) => rowReport(reportDeps(), args),
+    producto: (args) => productReport(reportDeps(), args),
+  };
+  for (const [command, run] of Object.entries(reports)) {
+    bot.command(command, async (ctx) => {
+      await showReport(ctx, await run(ctx.match));
+    });
+  }
+
   // ------------------------------------------------------------ botones
   bot.callbackQuery(new RegExp(`^${CALLBACK.CONFIRM}:(.+)$`), async (ctx) => {
     const pendingId = ctx.match[1] ?? '';
@@ -344,9 +432,28 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
     },
   );
 
+  bot.callbackQuery(new RegExp(`^${CALLBACK.PRODUCT}:([^:]+):(\\d+)$`), async (ctx) => {
+    const actor = actorOf(ctx);
+    const choice = productChoices.get(ctx.match[1] ?? '');
+    const product = choice?.options[Number(ctx.match[2])];
+    await ctx.answerCallbackQuery();
+    if (choice?.telegramId !== actor.telegramId || product === undefined) {
+      await ctx.reply(BOT_TEXT.CHOICE_EXPIRED);
+      return;
+    }
+    await removeKeyboard(ctx);
+    await showReport(ctx, await completeProductRequest(reportDeps(), choice.request, product));
+  });
+
   bot.callbackQuery(new RegExp(`^${CALLBACK.MENU}:(\\w+)$`), async (ctx) => {
     await ctx.answerCallbackQuery();
-    switch (ctx.match[1]) {
+    const command = ctx.match[1] ?? '';
+    const report = Object.hasOwn(reports, command) ? reports[command] : undefined;
+    if (report !== undefined) {
+      await showReport(ctx, await report(''));
+      return;
+    }
+    switch (command) {
       case 'ipv':
         await ctx.reply(BOT_TEXT.ASK_IPV_FILE);
         return;
@@ -386,7 +493,7 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
       await ctx.reply(result.message);
       return;
     }
-    await ctx.reply(FREE_TEXT_REPLY, { reply_markup: menuKeyboard(commandsFor(actor.role)) });
+    await ctx.reply(FREE_TEXT_REPLY, { reply_markup: menuKeyboard(menuCommandsFor(actor.role)) });
   });
 
   // ------------------------------------------------------------ errores
