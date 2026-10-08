@@ -48,6 +48,10 @@ export interface CuadreRow {
   /** Valores calculados que guardó la hoja, para comparar contra las fórmulas. */
   salida: number | null;
   ventaBruta: number | null;
+  invsInicial: number | null;
+  costoFinal: number | null;
+  invsFinal: number | null;
+  utilidad: number | null;
   /** Fórmulas escritas en C, I, K, L, M y N (sin `=`); `null` si hay un valor a mano. */
   formulas: CuadreRowFormulas;
 }
