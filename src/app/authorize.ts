@@ -1,4 +1,4 @@
-import { canRunCommand } from '../core/auth.js';
+import { canRunCommand, commandPermission, PERMISSION } from '../core/auth.js';
 import {
   ACCESS_OUTCOME,
   type AccessLogRepository,
@@ -31,6 +31,14 @@ export type AuthResult =
 
 const UNAUTHORIZED_MESSAGE = 'No autorizado.';
 const FORBIDDEN_MESSAGE = 'Tu rol no permite este comando. Usa /ayuda para ver los tuyos.';
+const FORBIDDEN_REPORT_MESSAGE =
+  'No autorizado para reportes: tu rol no ve costos ni utilidades. Usa /ayuda para ver tus comandos.';
+
+function forbiddenMessage(command: string): string {
+  return commandPermission(command) === PERMISSION.VIEW_FINANCIALS
+    ? FORBIDDEN_REPORT_MESSAGE
+    : FORBIDDEN_MESSAGE;
+}
 
 /**
  * Whitelist + permisos por rol. Todo rechazo queda en el log de accesos. El texto
@@ -45,7 +53,7 @@ export function authorize({ users, accessLog }: AuthDeps, request: AuthRequest):
 
   if (request.command !== null && !canRunCommand(user.role, request.command)) {
     accessLog.record({ ...request, outcome: ACCESS_OUTCOME.FORBIDDEN });
-    return { status: AUTH_STATUS.FORBIDDEN, user, message: FORBIDDEN_MESSAGE };
+    return { status: AUTH_STATUS.FORBIDDEN, user, message: forbiddenMessage(request.command) };
   }
 
   return { status: AUTH_STATUS.ALLOWED, user };
