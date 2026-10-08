@@ -74,6 +74,10 @@ function readRow(formulas: Grid, values: Grid, index: number): CuadreRow {
     final: value(COL.J),
     salida: value(COL.I),
     ventaBruta: value(COL.K),
+    invsInicial: value(COL.C),
+    costoFinal: value(COL.L),
+    invsFinal: value(COL.M),
+    utilidad: value(COL.N),
     formulas: {
       C: formula(COL.C),
       I: formula(COL.I),
