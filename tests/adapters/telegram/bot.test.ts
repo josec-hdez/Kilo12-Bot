@@ -305,7 +305,7 @@ describe('permisos', () => {
 describe('/ipv', () => {
   it('3 oct: vista previa con ✅/❌ y, al confirmar, crea la pestaña 03', async () => {
     await document(OWNER, '3oct');
-    expect(last().text).toContain('IPV 3 oct → pestaña 03');
+    expect(last().text).toContain('Hoja «3 oct» → pestaña 03');
     expect(last().text).toContain('Venta: 90,356 CUP');
     expect(last().buttons.some((b) => b.startsWith('force:'))).toBe(false);
 
@@ -320,19 +320,126 @@ describe('/ipv', () => {
     expect(last().text).toContain('pestaña 03');
   });
 
-  it('sin día y con varias pestañas: ofrece elegir el día con botones', async () => {
+  it('sin pie y con varias hojas: lista las 7 hojas, también las que no son días', async () => {
     await document(OWNER);
-    expect(last().text).toBe('¿Qué día del IPV cargo?');
-    expect(last().buttons).toHaveLength(5);
-    const day3 = last().buttons.find((b) => b.endsWith(':3-10'));
-    await click(OWNER, day3 ?? '');
+    const question = last().text;
+    expect(question).toContain(
+      '📥 El archivo tiene 7 hojas. ¿Cuál analizo? Escribe el nombre exacto o su número:',
+    );
+    for (const line of [
+      '1. Hoja1',
+      '2. 30 sep',
+      '3. IPV Alf. 30 sep',
+      '4. 1 oct',
+      '5. "2 oct " (con espacio al final)',
+      '6. 3 oct',
+      '7. 4 oct',
+    ])
+      expect(question).toContain(line);
+    expect(last().buttons).toEqual([]);
+  });
+
+  it('elige la hoja por número: 6 → 3 oct, venta 90,356', async () => {
+    await document(OWNER);
+    await text(OWNER, '6');
+    expect(last().text).toContain('Hoja «3 oct» → pestaña 03');
     expect(last().text).toContain('Venta: 90,356 CUP');
   });
 
-  it('otro usuario no puede usar el archivo que subió una dueña', async () => {
+  it('elige la hoja por nombre exacto', async () => {
     await document(OWNER);
-    const day3 = last().buttons.find((b) => b.endsWith(':3-10')) ?? '';
-    await click(CLERK, day3);
+    await text(OWNER, '3 oct');
+    expect(last().text).toContain('Venta: 90,356 CUP');
+  });
+
+  it('elige por nombre normalizado: "2 OCT" encuentra "2 oct "', async () => {
+    await document(OWNER);
+    await text(OWNER, '2 OCT');
+    expect(last().text).toContain('Hoja «2 oct» → pestaña 02');
+  });
+
+  it('error de tipeo: propone la hoja parecida y solo la usa con Sí', async () => {
+    await document(OWNER);
+    await text(OWNER, '3 ocr');
+    expect(last().text).toBe('No hay una hoja «3 ocr». ¿Quisiste decir «3 oct»?');
+    expect(last().buttons).toEqual(['ipvs:y', 'ipvs:n']);
+    await text(OWNER, 'sí');
+    expect(last().text).toBe(BOT_TEXT.SUGGESTION_ABOVE);
+    await click(OWNER, 'ipvs:y');
+    expect(last().text).toContain('Hoja «3 oct» → pestaña 03');
+    expect(last().text).toContain('Venta: 90,356 CUP');
+  });
+
+  it('No a la sugerencia: vuelve a preguntar con la lista', async () => {
+    await document(OWNER);
+    await text(OWNER, '3 ocr');
+    await click(OWNER, 'ipvs:n');
+    expect(last().text).toContain('¿Cuál analizo?');
+    await text(OWNER, '4');
+    expect(last().text).toContain('Hoja «1 oct» → pestaña 01');
+  });
+
+  it('nada parecido: lo dice y sigue esperando la hoja', async () => {
+    await document(OWNER);
+    await text(OWNER, 'inventario de diciembre');
+    expect(last().text).toBe(
+      'No hay una hoja «inventario de diciembre». Escribe el nombre exacto o su número (1–7), o /cancelar.',
+    );
+    await text(OWNER, '6');
+    expect(last().text).toContain('Venta: 90,356 CUP');
+  });
+
+  it('hoja sin fecha en el nombre: pregunta a qué día del cuadre corresponde', async () => {
+    await document(OWNER);
+    await text(OWNER, 'IPV Alf. 30 sep');
+    expect(last().text).toBe(
+      'Hoja «IPV Alf. 30 sep». ¿A qué día del cuadre corresponde? Escribe el día (ej. 05) o fecha (5 oct).',
+    );
+    await text(OWNER, 'mañana');
+    expect(last().text).toBe(BOT_TEXT.SHEET_DAY_INVALID);
+    await text(OWNER, '30 sep');
+    expect(last().text).toContain('Hoja «IPV Alf. 30 sep» → pestaña 30');
+  });
+
+  it('el pie con el nombre de la hoja se salta la pregunta', async () => {
+    await document(OWNER, '2 oct');
+    expect(last().text).toContain('Hoja «2 oct» → pestaña 02');
+  });
+
+  it('pie desconocido: no da error, pregunta la hoja', async () => {
+    await document(OWNER, 'el de ayer');
+    expect(last().text).toContain('No encontré la hoja «el de ayer» en el archivo.');
+    expect(last().text).toContain('¿Cuál analizo?');
+  });
+
+  it('/cancelar abandona la elección de hoja', async () => {
+    await document(OWNER);
+    await text(OWNER, '/cancelar');
+    expect(last().text).toBe(BOT_TEXT.FLOW_CANCELLED);
+    await text(OWNER, '6');
+    expect(last().text).toBe(FREE_TEXT_REPLY);
+  });
+
+  it('tocar un botón del teclado reemplaza la elección de hoja', async () => {
+    await document(OWNER);
+    await text(OWNER, '🔍 Producto');
+    await text(OWNER, '6');
+    expect(last().text).not.toContain('Venta: 90,356 CUP');
+  });
+
+  it('la elección de hoja vence a los 15 minutos', async () => {
+    await document(OWNER);
+    now = new Date(now.getTime() + 16 * 60 * 1000);
+    await text(OWNER, '6');
+    expect(last().text).toBe(FREE_TEXT_REPLY);
+  });
+
+  it('otro usuario no puede responder la elección de la dueña', async () => {
+    await document(OWNER);
+    await text(CLERK, '6');
+    expect(last().text).not.toContain('Venta');
+    await text(OWNER, '3 ocr');
+    await click(CLERK, 'ipvs:y');
     expect(last().text).toBe(BOT_TEXT.UPLOAD_EXPIRED);
   });
 
@@ -394,7 +501,8 @@ describe('/ipv', () => {
     await document(OWNER, undefined, 'foto.pdf');
     expect(last().text).toBe(BOT_TEXT.NOT_XLSX);
     await document(OWNER, '5oct');
-    expect(last().text).toContain('El archivo no tiene 5 oct');
+    expect(last().text).toContain('No encontré la hoja «5oct» en el archivo.');
+    expect(last().text).toContain('¿Cuál analizo?');
   });
 
   it('/ipv sin archivo pide el archivo; /ipv 5oct explica que Drive aún no está', async () => {
