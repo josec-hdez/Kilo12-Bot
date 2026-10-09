@@ -16,9 +16,11 @@ import { SqlitePendingActionRepository } from './adapters/sqlite/pending-actions
 import { SqliteSettingsRepository } from './adapters/sqlite/settings-repo.js';
 import { SqliteAccessLogRepository, SqliteUserRepository } from './adapters/sqlite/users-repo.js';
 import { createBot } from './adapters/telegram/bot.js';
+import { syncCommandMenus } from './adapters/telegram/command-menu.js';
 import { asCuadreReader, CuadreXlsxReader } from './adapters/xlsx/cuadre-xlsx-reader.js';
 import { CachedCuadreReader } from './app/cached-cuadre-reader.js';
 import { initialCuadreSeed, seedAll } from './app/seed.js';
+import { openSeedFile } from './app/seed-file.js';
 import { ConfigError, loadConfig, type Config } from './config.js';
 import { EQUIVALENCES } from './core/equivalences.js';
 import type { CuadreReader } from './ports/cuadre-source.js';
@@ -66,7 +68,7 @@ async function main(): Promise<void> {
   const seedFile =
     config.cuadreSeedPath === undefined
       ? null
-      : await CuadreXlsxReader.fromFile(config.cuadreSeedPath);
+      : await openSeedFile(config.cuadreSeedPath, (path) => CuadreXlsxReader.fromFile(path));
   const summary = seedAll(
     { users, catalog, settings },
     {
@@ -118,6 +120,17 @@ async function main(): Promise<void> {
   };
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
+
+  // Menú "/" por rol. Si Telegram no responde, el bot arranca igual (el menú es una ayuda).
+  try {
+    const menus = await syncCommandMenus(bot.api, users.list());
+    console.log(
+      `Menú de comandos: ${String(menus.ok)} publicados` +
+        (menus.failed === 0 ? '.' : `, ${String(menus.failed)} con error (ver avisos).`),
+    );
+  } catch (error) {
+    console.warn('No pude publicar el menú de comandos:', error);
+  }
 
   for (let attempt = 0; ; attempt++) {
     try {
