@@ -66,7 +66,7 @@ export function loadIpvPreview(input: LoadPreviewInput): string {
   const { draft, totals, tc } = input;
   const usd = tc === null ? ' · USD: falta la TC (/tc)' : ` · ${fmt(totals.ventaTotal / tc)} USD`;
   const lines = [
-    `📥 IPV ${input.ipvTab} → pestaña ${input.tab} del cuadre`,
+    `📥 Hoja «${input.ipvTab}» → pestaña ${input.tab} del cuadre`,
     `Venta: ${fmt(totals.ventaTotal)} CUP${usd}`,
     `   ${salesLine(input.sales, draft.ipvImporteTotal)}`,
   ];
