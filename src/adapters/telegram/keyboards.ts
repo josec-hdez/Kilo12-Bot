@@ -1,15 +1,14 @@
 import { InlineKeyboard, Keyboard } from 'grammy';
 import { keyboardRowsFor } from '../../app/keyboard-menu.js';
 import type { Role } from '../../core/auth.js';
-import { formatDayRef } from '../../core/tabs.js';
-import type { IpvTabRef } from '../../core/types.js';
 
 /** Prefijos del callback_data (máximo 64 bytes en Telegram). */
 export const CALLBACK = {
   CONFIRM: 'ok',
   CANCEL: 'no',
   FORCE: 'force',
-  IPV_DAY: 'ipvday',
+  /** "¿Quisiste decir…?" de la hoja del IPV: `ipvs:y` / `ipvs:n`. */
+  IPV_SHEET: 'ipvs',
   /** Botones del menú en línea de versiones anteriores (siguen en el historial del chat). */
   MENU: 'menu',
   /** Flujos guiados del teclado: `gd:<DD>` (/dia), `gr1:<DD>` y `gr2:<DD>:<DD>` (/rango), `gf:<DD>` (/fila), `gt:<métrica>` (/top). */
@@ -29,16 +28,11 @@ export function confirmKeyboard(pendingId: string, requiresForce: boolean): Inli
   return keyboard.text('❌ Cancelar', `${CALLBACK.CANCEL}:${pendingId}`);
 }
 
-export function dayChoiceKeyboard(uploadId: string, days: readonly IpvTabRef[]): InlineKeyboard {
-  const keyboard = new InlineKeyboard();
-  days.forEach((day, index) => {
-    keyboard.text(
-      formatDayRef(day),
-      `${CALLBACK.IPV_DAY}:${uploadId}:${String(day.day)}-${String(day.month)}`,
-    );
-    if (index % 4 === 3) keyboard.row();
-  });
-  return keyboard;
+/** Sí / No a la hoja sugerida. */
+export function sheetSuggestionKeyboard(): InlineKeyboard {
+  return new InlineKeyboard()
+    .text('Sí', `${CALLBACK.IPV_SHEET}:y`)
+    .text('No', `${CALLBACK.IPV_SHEET}:n`);
 }
 
 /** Opciones cuando el nombre coincide con varios productos. */
