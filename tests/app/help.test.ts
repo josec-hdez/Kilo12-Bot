@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { commandsFor, helpText, menuCommandsFor } from '../../src/app/help.js';
+import { commandsFor, helpText } from '../../src/app/help.js';
 import { todayIn } from '../../src/app/today.js';
 import { ROLE } from '../../src/core/auth.js';
 
@@ -36,15 +36,9 @@ describe('ayuda por rol', () => {
       'ayuda',
     ]);
   });
-  it('el menú solo trae comandos sin argumentos', () => {
-    expect(menuCommandsFor(ROLE.PARTNER).map((c) => c.command)).toEqual([
-      'validar',
-      'hoy',
-      'mes',
-      'semana',
-      'ganancia',
-      'ayuda',
-    ]);
+  it('la ayuda explica los botones y /cancelar', () => {
+    expect(helpText(ROLE.OWNER)).toContain('Los botones de abajo');
+    expect(helpText(ROLE.OWNER)).toContain('/cancelar');
   });
   it('el dependiente solo carga el IPV', () => {
     expect(commandsFor(ROLE.CLERK).map((c) => c.command)).toEqual(['ipv', 'ayuda']);
