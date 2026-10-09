@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FakeSheetsGateway } from '../../../src/adapters/sheets/fake-sheets-gateway.js';
 import { SqliteCatalogRepository } from '../../../src/adapters/sqlite/catalog-repo.js';
 import { openDatabase } from '../../../src/adapters/sqlite/db.js';
@@ -18,10 +18,12 @@ import {
   BOT_TEXT,
   createBot,
   parseTcValue,
+  rowDayPrompt,
   splitMessage,
 } from '../../../src/adapters/telegram/bot.js';
 import { asCuadreReader, CuadreXlsxReader } from '../../../src/adapters/xlsx/cuadre-xlsx-reader.js';
 import { FREE_TEXT_REPLY } from '../../../src/app/help.js';
+import { keyboardRowsFor, menuCommandsFor } from '../../../src/app/keyboard-menu.js';
 import { MAX_TABLE_WIDTH, preLines } from '../../../src/app/report-format.js';
 import { initialCuadreSeed, seedAll } from '../../../src/app/seed.js';
 import { ROLE } from '../../../src/core/auth.js';
@@ -50,6 +52,14 @@ interface SentMessage {
   parseMode: string | undefined;
   /** callback_data de los botones, si el mensaje los trae. */
   buttons: string[];
+  /** Teclado fijo (reply keyboard), si el mensaje lo trae. */
+  keys: string[][];
+  persistent: boolean;
+}
+
+interface MenuCall {
+  commands: { command: string }[];
+  scope: { type: string; chat_id?: number };
 }
 
 interface CallbackAnswer {
@@ -65,10 +75,20 @@ let edited: number[];
 /** Si no es null, el cuadre falla con este error (para probar el mensaje de error). */
 let cuadreError: Error | null;
 let chatActions: string[];
+let menuCalls: MenuCall[];
 let changeLog: SqliteChangeLogRepository;
 let accessLog: SqliteAccessLogRepository;
 let bot: ReturnType<typeof createBot>;
 let updateId: number;
+
+function keysOf(payload: Record<string, unknown>): { keys: string[][]; persistent: boolean } {
+  const markup = payload.reply_markup as
+    { keyboard?: (string | { text: string })[][]; is_persistent?: boolean } | undefined;
+  const keys = (markup?.keyboard ?? []).map((row) =>
+    row.map((key) => (typeof key === 'string' ? key : key.text)),
+  );
+  return { keys, persistent: markup?.is_persistent === true };
+}
 
 function buttonsOf(payload: Record<string, unknown>): string[] {
   const markup = payload.reply_markup as
@@ -100,6 +120,7 @@ beforeEach(async () => {
   edits = 0;
   edited = [];
   chatActions = [];
+  menuCalls = [];
   cuadreError = null;
   const reader = asCuadreReader(cuadre);
   const guard = <T>(read: () => Promise<T>) =>
@@ -155,6 +176,7 @@ beforeEach(async () => {
         text: body.text as string,
         parseMode: body.parse_mode as string | undefined,
         buttons: buttonsOf(body),
+        ...keysOf(body),
       });
       return Promise.resolve({
         ok: true,
@@ -177,6 +199,11 @@ beforeEach(async () => {
       edited.push(body.message_id as number);
     }
     if (method === 'sendChatAction') chatActions.push(body.action as string);
+    if (method === 'setMyCommands')
+      menuCalls.push({
+        commands: body.commands as { command: string }[],
+        scope: body.scope as MenuCall['scope'],
+      });
     if (method === 'answerCallbackQuery') answers.push({ text: body.text as string | undefined });
     if (method === 'editMessageReplyMarkup') edits++;
     return Promise.resolve({ ok: true, result: true } as never);
@@ -433,24 +460,23 @@ describe('/validar, /ayuda y texto libre', () => {
     expect(all).toMatch(/agua\s+500 ml/);
   });
 
-  it('/ayuda según el rol', async () => {
+  it('/ayuda según el rol, con el teclado fijo del rol', async () => {
     await text(CLERK, '/ayuda');
     expect(last().text).toContain('/ipv');
     expect(last().text).not.toContain('/validar');
-    expect(last().buttons).toEqual(['menu:ipv', 'menu:ayuda']);
+    expect(last().keys).toEqual([['📥 IPV', '❓ Ayuda']]);
+    expect(last().persistent).toBe(true);
   });
 
-  it('texto libre → menú de botones del rol (sin IA)', async () => {
+  it('texto libre → teclado fijo del rol (sin IA)', async () => {
     await text(PARTNER, '¿cuánto vendimos ayer?');
     expect(last().text).toBe(FREE_TEXT_REPLY);
-    expect(last().buttons).toEqual([
-      'menu:validar',
-      'menu:hoy',
-      'menu:mes',
-      'menu:semana',
-      'menu:ganancia',
-      'menu:ayuda',
-    ]);
+    expect(last().keys).toEqual(keyboardRowsFor(ROLE.PARTNER));
+    await text(PARTNER, '🔎 Validar');
+    expect(last().text).toContain('🔎 Validación del cuadre: 05');
+  });
+
+  it('los botones en línea del menú anterior siguen funcionando', async () => {
     await click(PARTNER, 'menu:validar');
     expect(last().text).toContain('🔎 Validación del cuadre: 05');
   });
@@ -549,6 +575,138 @@ describe('reportes', () => {
   it('botón del menú: 📅 Mes', async () => {
     await click(OWNER, 'menu:mes');
     expect(last().text).toContain('<b>Mes</b>');
+  });
+});
+
+describe('teclado fijo y flujos guiados', () => {
+  it('/start: ayuda con el teclado de la dueña y publica su menú "/"', async () => {
+    await text(OWNER, '/start');
+    expect(last().keys).toEqual(keyboardRowsFor(ROLE.OWNER));
+    expect(last().persistent).toBe(true);
+    await vi.waitFor(() => {
+      expect(menuCalls).toEqual([
+        {
+          commands: menuCommandsFor(ROLE.OWNER),
+          scope: { type: 'chat', chat_id: OWNER },
+        },
+      ]);
+    });
+  });
+
+  it('un botón sin argumentos ejecuta su comando (📆 Mes)', async () => {
+    await text(OWNER, '📆 Mes');
+    expect(last().text).toContain('<b>Mes</b>');
+  });
+
+  it('el texto del botón se reconoce aunque falte el selector de emoji', async () => {
+    await text(OWNER, '↩ Deshacer');
+    expect(last().text).toBe('No hay escrituras para deshacer.');
+  });
+
+  it('un botón que el rol no puede usar queda rechazado y registrado', async () => {
+    await text(CLERK, '📆 Mes');
+    expect(last().text).toContain('No autorizado para reportes');
+    expect(accessLog.list()).toMatchObject([
+      { telegramId: CLERK, command: '/mes', outcome: 'forbidden' },
+    ]);
+  });
+
+  it('📍 Día: pregunta el día con botones y muestra /dia', async () => {
+    await text(OWNER, '📍 Día');
+    expect(last().text).toBe(BOT_TEXT.ASK_DAY);
+    expect(last().buttons).toEqual(['gd:01', 'gd:02', 'gd:03', 'gd:04', 'gd:05']);
+    await click(OWNER, 'gd:02');
+    expect(last().text).toContain('pestaña 02 · TC 775');
+  });
+
+  it('↔️ Rango: desde → hasta (solo días posteriores) → /rango', async () => {
+    await text(OWNER, '↔️ Rango');
+    expect(last().text).toBe(BOT_TEXT.ASK_FROM);
+    await click(OWNER, 'gr1:02');
+    expect(last().text).toBe(BOT_TEXT.ASK_TO);
+    expect(last().buttons).toEqual(['gr2:02:02', 'gr2:02:03', 'gr2:02:04', 'gr2:02:05']);
+    await click(OWNER, 'gr2:02:03');
+    expect(last().text).toContain('Venta: <b>191,076 CUP</b>');
+  });
+
+  it('🔍 Producto: pregunta el nombre y responde con /producto', async () => {
+    await text(OWNER, '🔍 Producto');
+    expect(last().text).toBe(BOT_TEXT.ASK_PRODUCT);
+    await text(OWNER, 'arroz');
+    expect(last().text).toContain('Vendió: <b>6</b> unidades · venta <b>5,760 CUP</b>');
+    // La pregunta ya se respondió: el siguiente texto vuelve a ser texto libre.
+    await text(OWNER, 'arroz');
+    expect(last().text).toBe(FREE_TEXT_REPLY);
+  });
+
+  it('📄 Fila: producto → día → /fila', async () => {
+    await text(OWNER, '📄 Fila');
+    expect(last().text).toBe(BOT_TEXT.ASK_ROW_PRODUCT);
+    await text(OWNER, 'arroz');
+    expect(last().text).toBe(rowDayPrompt('arroz'));
+    expect(last().buttons).toEqual(['gf:01', 'gf:02', 'gf:03', 'gf:04', 'gf:05']);
+    await text(OWNER, 'hola');
+    expect(last().text).toBe(BOT_TEXT.CHOOSE_DAY_ABOVE);
+    await click(OWNER, 'gf:02');
+    expect(last().text).toContain('pestaña 02');
+    expect(last().text).toContain('K · Venta Bruta: <b>1,900</b>');
+  });
+
+  it('📄 Fila: otro usuario no puede usar el día de una pregunta ajena', async () => {
+    await text(OWNER, '📄 Fila');
+    await text(OWNER, 'arroz');
+    await click(PARTNER, 'gf:02');
+    expect(last().text).toBe(BOT_TEXT.FLOW_EXPIRED);
+  });
+
+  it('🏆 Top: elige la métrica con botones', async () => {
+    await text(OWNER, '🏆 Top');
+    expect(last().text).toBe(BOT_TEXT.ASK_TOP);
+    expect(last().buttons).toEqual(['gt:venta', 'gt:utilidad', 'gt:unidades']);
+    await click(OWNER, 'gt:utilidad');
+    expect(last().text).toContain('por utilidad');
+  });
+
+  it('💱 TC: pide el número, insiste si no lo es y prepara /tc con confirmación', async () => {
+    await document(OWNER, '3oct');
+    await click(OWNER, button('ok'));
+    await text(OWNER, '💱 TC');
+    expect(last().text).toBe(BOT_TEXT.ASK_TC_VALUE);
+    await text(OWNER, 'setecientos');
+    expect(last().text).toBe(BOT_TEXT.TC_NOT_NUMBER);
+    await text(OWNER, '780');
+    expect(last().text).toContain('TC de la pestaña 03: vacía → 780');
+    expect(last().buttons.some((b) => b.startsWith('ok:'))).toBe(true);
+  });
+
+  it('📥 IPV: pide el archivo', async () => {
+    await text(CLERK, '📥 IPV');
+    expect(last().text).toBe(BOT_TEXT.ASK_IPV_FILE);
+  });
+
+  it('/cancelar abandona la pregunta en curso', async () => {
+    await text(OWNER, '🔍 Producto');
+    await text(OWNER, '/cancelar');
+    expect(last().text).toBe(BOT_TEXT.FLOW_CANCELLED);
+    await text(OWNER, 'arroz');
+    expect(last().text).toBe(FREE_TEXT_REPLY);
+    await text(OWNER, '/cancelar');
+    expect(last().text).toBe(BOT_TEXT.NOTHING_TO_CANCEL);
+  });
+
+  it('tocar otro botón reemplaza la pregunta en curso', async () => {
+    await text(OWNER, '💱 TC');
+    await text(OWNER, '📆 Mes');
+    expect(last().text).toContain('<b>Mes</b>');
+    await text(OWNER, '780');
+    expect(last().text).toBe(FREE_TEXT_REPLY);
+  });
+
+  it('la pregunta vence a los 15 minutos', async () => {
+    await text(OWNER, '🔍 Producto');
+    now = new Date(now.getTime() + 16 * 60 * 1000);
+    await text(OWNER, 'arroz');
+    expect(last().text).toBe(FREE_TEXT_REPLY);
   });
 });
 
