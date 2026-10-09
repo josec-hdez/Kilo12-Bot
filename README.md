@@ -6,14 +6,14 @@ Las reglas de negocio (fórmulas, equivalencias IPV ↔ cuadre, validaciones) es
 
 ## Qué hace esta versión (MVP)
 
-| Comando                 | Qué hace                                                                                                                                                                                                                                        |
-| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/ipv`                  | Cargar el IPV: se envía o reenvía el `.xlsx` al bot. El día puede ir en el pie del archivo (`3oct`); si el archivo trae varios días, el bot ofrece botones para elegir. Muestra una vista previa y pide confirmación antes de crear la pestaña. |
-| `/validar [03\|semana]` | Revisa el cuadre y agrupa los hallazgos por severidad 🔴 (afecta la ganancia), 🟡 (inventario o inversión) y ⚪ (cosmético).                                                                                                                    |
-| `/tc 780 [03]`          | Fija la tasa de cambio del día (celda Q18), con confirmación.                                                                                                                                                                                   |
-| `/deshacer`             | Revierte la última escritura en la hoja, con confirmación.                                                                                                                                                                                      |
-| `/ayuda`                | Lista de comandos según el rol.                                                                                                                                                                                                                 |
-| `/cancelar`             | Abandona una acción en curso (por ejemplo, cuando el bot espera el motivo de "⚠️ Confirmar igual").                                                                                                                                             |
+| Comando                 | Qué hace                                                                                                                                                                                                                                             |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/ipv`                  | Cargar el IPV: se envía o reenvía el `.xlsx` al bot. Si el archivo trae varias hojas, el bot pregunta cuál analizar (ver [Elegir la hoja del IPV](#elegir-la-hoja-del-ipv)). Muestra una vista previa y pide confirmación antes de crear la pestaña. |
+| `/validar [03\|semana]` | Revisa el cuadre y agrupa los hallazgos por severidad 🔴 (afecta la ganancia), 🟡 (inventario o inversión) y ⚪ (cosmético).                                                                                                                         |
+| `/tc 780 [03]`          | Fija la tasa de cambio del día (celda Q18), con confirmación.                                                                                                                                                                                        |
+| `/deshacer`             | Revierte la última escritura en la hoja, con confirmación.                                                                                                                                                                                           |
+| `/ayuda`                | Lista de comandos según el rol.                                                                                                                                                                                                                      |
+| `/cancelar`             | Abandona una acción en curso (por ejemplo, cuando el bot espera el motivo de "⚠️ Confirmar igual").                                                                                                                                                  |
 
 **Reportes** (dueñas y socios; el dependiente recibe "No autorizado para reportes"). Todo se recalcula desde las cantidades, costos y precios de cada fila, no desde el resumen de la hoja. Los días son las pestañas `DD` del libro: el libro es el mes.
 
@@ -41,6 +41,23 @@ Una venta sin costo cuenta como ganancia completa: los reportes la marcan como u
 
 **Sin IA.** El bot no interpreta mensajes libres: cualquier texto que no sea un comando ni un botón recibe la ayuda y el teclado del rol.
 
+### Elegir la hoja del IPV
+
+El IPV suele traer muchas hojas. El bot **nunca adivina cuál cargar**:
+
+1. Al recibir el `.xlsx`, responde con la lista numerada de **todas** las hojas, también las que no son días (`Hoja1`, `IPV Alf. 30 sep`). Los nombres con espacios en los bordes aparecen entre comillas con el aviso "(con espacio al final)".
+2. Se responde con el **número** de la lista o con el **nombre**. Mayúsculas, acentos y espacios de más no importan (`2 oct` encuentra `"2 oct "`).
+3. Si el nombre no coincide con ninguna hoja, el bot propone la más parecida (_"No hay una hoja «3 ocr». ¿Quisiste decir «3 oct»?"_) y solo la usa si se pulsa **Sí**. **No** vuelve a preguntar.
+4. Si el nombre de la hoja no dice el día (`Hoja1`), pregunta a qué día del cuadre corresponde (`05` o `5 oct`).
+5. La vista previa muestra siempre la hoja elegida: _"📥 Hoja «3 oct» → pestaña 03 del cuadre"_.
+
+Atajos:
+
+- **Pie del archivo:** si al enviar el `.xlsx` se escribe el nombre de la hoja o su fecha (`3 oct`, `3oct`, `03`) y eso identifica una sola hoja, se salta la pregunta. Si no la identifica, el bot pregunta igual.
+- **Archivo de una sola hoja:** va directo a la vista previa.
+
+La pregunta es solo de quien envió el archivo, vence a los 15 minutos y se abandona con `/cancelar` o tocando otro botón del teclado.
+
 ### Teclado de botones y menú "/"
 
 Cada usuario ve, debajo de la barra de escritura, un **teclado fijo** con los comandos que su rol puede usar (reemplaza al teclado de letras; el ícono ⊞ de la barra alterna entre los dos). Se envía con `/start`, `/ayuda` y ante cualquier texto libre.
@@ -66,7 +83,7 @@ Los botones que necesitan un dato lo preguntan:
 | 📄 Fila     | Nombre del producto y luego el día con botones → `/fila`.                     |
 | 🏆 Top      | Venta, Utilidad o Unidades → `/top`.                                          |
 | 💱 TC       | "¿Cuál es la TC de hoy?": se escribe el número → `/tc` con vista previa y ✅. |
-| 📥 IPV      | Pide el `.xlsx`.                                                              |
+| 📥 IPV      | Pide el `.xlsx` y, si tiene varias hojas, cuál analizar.                      |
 
 Cada pregunta es solo de quien tocó el botón, vence a los 15 minutos y se abandona con `/cancelar` o tocando otro botón. Los comandos escritos (`/fila pollo 03`) siguen funcionando igual.
 
@@ -195,7 +212,7 @@ Después de agregar a alguien, esa persona debe enviar **`/start`** al bot: reci
 
 ## Flujo diario
 
-1. **Cargar el IPV:** reenviar el `.xlsx` al bot (con el día en el pie si el archivo tiene varios). Revisar la vista previa: venta, utilidad bruta, productos sin costo y alertas.
+1. **Cargar el IPV:** reenviar el `.xlsx` al bot y, si tiene varias hojas, decir cuál analizar. Revisar la vista previa: hoja elegida, venta, utilidad bruta, productos sin costo y alertas.
    - La venta del cuadre debe ser igual al `IMPORTE TOTAL` del IPV. La única diferencia aceptada es exactamente la merma y el consumo valorados a precio (aviso 🟡).
    - Si hay bloqueos 🔴 (por ejemplo, `CANT. FINAL` vacía con existencia), no aparece ✅. Una dueña puede usar **⚠️ Confirmar igual** y escribir el motivo, que queda registrado.
 2. **Fijar la TC:** `/tc 780`.

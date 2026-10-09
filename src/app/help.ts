@@ -14,7 +14,7 @@ export const MVP_COMMANDS: readonly CommandHelp[] = [
     command: 'ipv',
     usage: '/ipv',
     description:
-      'Cargar el IPV del día: envía (o reenvía) el .xlsx. En el pie del archivo puedes poner el día, por ejemplo 3oct.',
+      'Cargar el IPV del día: envía (o reenvía) el .xlsx. Si tiene varias hojas, te pregunto cuál analizar; o escribe el nombre de la hoja en el pie del archivo, por ejemplo 3 oct.',
   },
   {
     command: 'validar',

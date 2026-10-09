@@ -74,4 +74,28 @@ describe('ExcelIpvSource con el IPV real', () => {
   it('lanza un error claro si el día no existe en el archivo', () => {
     expect(() => source.readDay({ day: 5, month: 10 })).toThrow(/5 oct/);
   });
+
+  it('lista todas las hojas con su nombre exacto, también las que no son días', () => {
+    expect(source.listSheets()).toEqual([
+      'Hoja1',
+      '30 sep',
+      'IPV Alf. 30 sep',
+      '1 oct',
+      '2 oct ',
+      '3 oct',
+      '4 oct',
+    ]);
+  });
+
+  it('lee una hoja por su nombre exacto y la asigna al día pedido', () => {
+    const day = source.readSheet('3 oct', { day: 3, month: 10 });
+    expect(day).toMatchObject({ tabName: '3 oct', day: 3, month: 10, importeTotal: 90356 });
+    const alf = source.readSheet('IPV Alf. 30 sep', { day: 30, month: 9 });
+    expect(alf).toMatchObject({ tabName: 'IPV Alf. 30 sep', day: 30, month: 9 });
+  });
+
+  it('readSheet exige el nombre exacto', () => {
+    expect(() => source.readSheet('2 oct', { day: 2, month: 10 })).toThrow(/«2 oct»/);
+    expect(() => source.readSheet('3 OCT', { day: 3, month: 10 })).toThrow(/«3 OCT»/);
+  });
 });

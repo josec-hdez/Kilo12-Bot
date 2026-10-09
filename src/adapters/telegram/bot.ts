@@ -3,7 +3,16 @@ import type { UserFromGetMe } from 'grammy/types';
 import { AUTH_STATUS, authorize, type AuthDeps } from '../../app/authorize.js';
 import { cancelPending, confirmPending } from '../../app/confirm.js';
 import { FREE_TEXT_REPLY, helpText } from '../../app/help.js';
-import { INTAKE_STATUS, parseDayArg, resolveIpvDay } from '../../app/ipv-intake.js';
+import {
+  ASK_SHEET_DAY,
+  notFoundText,
+  parseDayAnswer,
+  resolveCaptionSheet,
+  resolveSheetAnswer,
+  SHEET_ANSWER,
+  sheetQuestion,
+  suggestionQuestion,
+} from '../../app/ipv-intake.js';
 import { BUTTON_FLOW, buttonForText, type MenuButton } from '../../app/keyboard-menu.js';
 import { dayTab, prepareIpvLoad } from '../../app/load-ipv.js';
 import {
@@ -41,11 +50,12 @@ import { parseValidateArgs, runValidation } from '../../app/validate-report.js';
 import { can, PERMISSION } from '../../core/auth.js';
 import { buildAliasIndex } from '../../core/mapping.js';
 import { SETTING } from '../../core/settings.js';
-import type { DayRef } from '../../core/types.js';
+import { parseIpvTabDate } from '../../core/tabs.js';
+import type { DayRef, IpvDay } from '../../core/types.js';
 import type { IpvSource } from '../../ports/ipv-source.js';
 import type { CuadreReader } from '../../ports/cuadre-source.js';
 import type { SettingsRepository } from '../../ports/repositories.js';
-import { ExcelIpvSource } from '../xlsx/excel-ipv-source.js';
+import { ExcelIpvSource, IpvFormatError } from '../xlsx/excel-ipv-source.js';
 import type { BotContext } from './context.js';
 import { telegramFileDownloader, type FileDownloader } from './file-downloader.js';
 import { syncUserCommandMenu } from './command-menu.js';
@@ -53,9 +63,9 @@ import {
   CALLBACK,
   confirmKeyboard,
   dayButtons,
-  dayChoiceKeyboard,
   productChoiceKeyboard,
   replyKeyboard,
+  sheetSuggestionKeyboard,
   topMetricButtons,
 } from './keyboards.js';
 import { TtlStore } from './ttl-store.js';
@@ -108,9 +118,12 @@ const DEFAULT_PLACEHOLDER = '⏳ Calculando…';
 
 export const BOT_TEXT = {
   ASK_IPV_FILE:
-    '📥 Envíame (o reenvíame) el archivo .xlsx del IPV. Si tiene varios días, escribe el día en el pie del archivo (por ejemplo 3oct) o elígelo después.',
+    '📥 Envíame (o reenvíame) el archivo .xlsx del IPV. Si tiene varias hojas, te pregunto cuál analizar (o escribe el nombre de la hoja en el pie del archivo, por ejemplo 3 oct).',
   NO_DRIVE:
-    'Todavía no leo el IPV desde Drive (faltan los IDs de la carpeta). Envíame el .xlsx y escribe el día en el pie del archivo, por ejemplo 3oct.',
+    'Todavía no leo el IPV desde Drive (faltan los IDs de la carpeta). Envíame el .xlsx; si tiene varias hojas, te pregunto cuál analizar.',
+  NO_SHEETS: 'El archivo no tiene hojas.',
+  SHEET_DAY_INVALID: 'No entiendo ese día. Escribe el día (ej. 05) o fecha (5 oct), o /cancelar.',
+  SUGGESTION_ABOVE: 'Responde Sí o No con los botones de arriba, o /cancelar.',
   NOT_XLSX: 'Solo leo archivos .xlsx del IPV.',
   FILE_TOO_BIG: 'El archivo pasa de 20 MB; Telegram no deja descargarlo.',
   UPLOAD_EXPIRED:
@@ -198,6 +211,8 @@ const FLOW_CALLBACK_COMMAND: Readonly<Record<string, string>> = {
   [CALLBACK.FLOW_TO]: '/rango',
   [CALLBACK.FLOW_ROW_DAY]: '/fila',
   [CALLBACK.FLOW_TOP]: '/top',
+  // "¿Quisiste decir…?" de la hoja del IPV: sigue siendo cargar el IPV.
+  [CALLBACK.IPV_SHEET]: '/ipv',
   // Elegir producto completa /fila o /producto: exige el mismo permiso.
   [CALLBACK.PRODUCT]: '/producto',
 };
@@ -250,9 +265,25 @@ export function parseTcValue(raw: string): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-interface UploadedIpv {
-  telegramId: number;
+/** Paso de la elección de la hoja del IPV. */
+const IPV_STEP = {
+  /** Espera el nombre o el número de la hoja. */
+  SHEET: 'sheet',
+  /** Propuso una hoja parecida: espera Sí / No. */
+  SUGGESTION: 'suggestion',
+  /** La hoja no tiene fecha en el nombre: espera el día del cuadre. */
+  DAY: 'day',
+} as const;
+
+type IpvStep = (typeof IPV_STEP)[keyof typeof IPV_STEP];
+
+/** IPV subido que espera que su dueño elija la hoja (y el día, si hace falta). */
+interface IpvChoice {
+  step: IpvStep;
   source: IpvSource;
+  sheets: string[];
+  /** Hoja propuesta (SUGGESTION) o elegida (DAY). */
+  sheet?: string;
 }
 
 interface AwaitingReason {
@@ -293,12 +324,16 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
     options.botInfo === undefined ? {} : { botInfo: options.botInfo },
   );
   const clock = deps.pipeline.clock;
-  const uploads = new TtlStore<UploadedIpv>(CONVERSATION_TTL_MS, clock);
+  /** Elección de hoja en curso, por usuario: solo quien subió el archivo responde. */
+  const ipvChoices = new TtlStore<IpvChoice>(CONVERSATION_TTL_MS, clock);
   const awaitingReason = new TtlStore<AwaitingReason>(CONVERSATION_TTL_MS, clock);
   const productChoices = new TtlStore<ProductChoice>(CONVERSATION_TTL_MS, clock);
   /** Flujo guiado en curso, por usuario: cada uno responde solo a sus preguntas. */
   const flows = new TtlStore<GuidedFlow>(CONVERSATION_TTL_MS, clock);
-  const flowCommand = (telegramId: number) => flows.get(String(telegramId))?.command;
+  const flowCommand = (telegramId: number) =>
+    ipvChoices.get(String(telegramId)) === undefined
+      ? flows.get(String(telegramId))?.command
+      : 'ipv';
   const download = deps.downloadFile ?? telegramFileDownloader(bot.api, options.token);
 
   // ------------------------------------------------------------ permisos
@@ -341,12 +376,80 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
     }
   }
 
-  async function loadDay(ctx: BotContext, source: IpvSource, ref: DayRef): Promise<void> {
-    const ipv = source.readDay(ref);
+  /** Lee la hoja elegida y muestra la vista previa de la carga. */
+  async function loadSheet(
+    ctx: BotContext,
+    source: IpvSource,
+    sheet: string,
+    ref: DayRef,
+  ): Promise<void> {
+    let ipv: IpvDay;
+    try {
+      ipv = source.readSheet(sheet, ref);
+    } catch (error) {
+      if (!(error instanceof IpvFormatError)) throw error;
+      await ctx.reply(`No pude leer la hoja «${sheet}»: ${error.message}`);
+      return;
+    }
     const prepared = await withTyping(ctx, () =>
       prepareIpvLoad(deps.pipeline, actorOf(ctx), { ipv, tc: null }),
     );
     await showPrepared(ctx, prepared);
+  }
+
+  /** Hoja ya elegida: si su nombre no dice el día, se pregunta; si lo dice, se carga. */
+  async function useSheet(ctx: BotContext, source: IpvSource, sheets: string[], sheet: string) {
+    const key = String(actorOf(ctx).telegramId);
+    const ref = parseIpvTabDate(sheet);
+    if (ref === null) {
+      ipvChoices.set(key, { step: IPV_STEP.DAY, source, sheets, sheet });
+      await ctx.reply(`Hoja «${sheet}». ${ASK_SHEET_DAY}`);
+      return;
+    }
+    ipvChoices.delete(key);
+    await loadSheet(ctx, source, sheet, ref);
+  }
+
+  async function askSheet(ctx: BotContext, source: IpvSource, sheets: string[], intro?: string) {
+    ipvChoices.set(String(actorOf(ctx).telegramId), { step: IPV_STEP.SHEET, source, sheets });
+    await replyLong(ctx, sheetQuestion(sheets, intro));
+  }
+
+  /** Respuesta escrita mientras se elige la hoja del IPV. */
+  async function answerIpvChoice(ctx: BotContext, choice: IpvChoice, answer: string) {
+    const key = String(actorOf(ctx).telegramId);
+    switch (choice.step) {
+      case IPV_STEP.SUGGESTION:
+        await ctx.reply(BOT_TEXT.SUGGESTION_ABOVE);
+        return;
+      case IPV_STEP.DAY: {
+        const ref = parseDayAnswer(answer, todayIn(clock(), deps.timezone));
+        if (ref === null || choice.sheet === undefined) {
+          await ctx.reply(BOT_TEXT.SHEET_DAY_INVALID);
+          return;
+        }
+        ipvChoices.delete(key);
+        await loadSheet(ctx, choice.source, choice.sheet, ref);
+        return;
+      }
+      case IPV_STEP.SHEET: {
+        const result = resolveSheetAnswer(choice.sheets, answer);
+        switch (result.status) {
+          case SHEET_ANSWER.FOUND:
+            await useSheet(ctx, choice.source, choice.sheets, result.sheet);
+            return;
+          case SHEET_ANSWER.SUGGEST:
+            ipvChoices.set(key, { ...choice, step: IPV_STEP.SUGGESTION, sheet: result.suggestion });
+            await ctx.reply(suggestionQuestion(answer, result.suggestion), {
+              reply_markup: sheetSuggestionKeyboard(),
+            });
+            return;
+          case SHEET_ANSWER.NOT_FOUND:
+            await ctx.reply(notFoundText(answer, choice.sheets.length));
+            return;
+        }
+      }
+    }
   }
 
   async function removeKeyboard(ctx: BotContext): Promise<void> {
@@ -460,11 +563,6 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
       return;
     }
 
-    const arg = parseDayArg(argumentOf(ctx.message.caption));
-    if (arg === undefined) {
-      await ctx.reply('No entiendo el día del pie del archivo. Usa, por ejemplo, 3oct o 03.');
-      return;
-    }
     let source: IpvSource;
     try {
       source = await withTyping(ctx, async () =>
@@ -476,22 +574,33 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
       return;
     }
 
-    const intake = resolveIpvDay(source.listDays(), arg);
-    switch (intake.status) {
-      case INTAKE_STATUS.ERROR:
-        await ctx.reply(intake.message);
-        return;
-      case INTAKE_STATUS.DAY:
-        await loadDay(ctx, source, intake.ref);
-        return;
-      case INTAKE_STATUS.CHOOSE: {
-        const uploadId = uploads.add({ telegramId: actorOf(ctx).telegramId, source });
-        await ctx.reply('¿Qué día del IPV cargo?', {
-          reply_markup: dayChoiceKeyboard(uploadId, intake.options),
-        });
-        return;
-      }
+    // Subir un archivo reemplaza cualquier pregunta en curso.
+    const key = String(actorOf(ctx).telegramId);
+    flows.delete(key);
+    ipvChoices.delete(key);
+
+    const sheets = source.listSheets();
+    const [single] = sheets;
+    if (single === undefined) {
+      await ctx.reply(BOT_TEXT.NO_SHEETS);
+      return;
     }
+    if (sheets.length === 1) {
+      await useSheet(ctx, source, sheets, single);
+      return;
+    }
+    const caption = argumentOf(ctx.message.caption);
+    const named = resolveCaptionSheet(sheets, caption);
+    if (named !== null) {
+      await useSheet(ctx, source, sheets, named);
+      return;
+    }
+    await askSheet(
+      ctx,
+      source,
+      sheets,
+      caption === '' ? undefined : `No encontré la hoja «${caption}» en el archivo.`,
+    );
   });
 
   // ------------------------------------------------------------ reportes
@@ -530,9 +639,10 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
   async function cancel(ctx: BotContext): Promise<void> {
     const key = String(actorOf(ctx).telegramId);
     const hadReason = awaitingReason.get(key) !== undefined;
-    const hadFlow = flows.get(key) !== undefined;
+    const hadFlow = flows.get(key) !== undefined || ipvChoices.get(key) !== undefined;
     awaitingReason.delete(key);
     flows.delete(key);
+    ipvChoices.delete(key);
     if (hadReason) await ctx.reply(BOT_TEXT.REASON_CANCELLED);
     else if (hadFlow) await ctx.reply(BOT_TEXT.FLOW_CANCELLED);
     else await ctx.reply(BOT_TEXT.NOTHING_TO_CANCEL);
@@ -594,6 +704,7 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
   async function pressButton(ctx: BotContext, button: MenuButton): Promise<void> {
     const key = String(actorOf(ctx).telegramId);
     flows.delete(key);
+    ipvChoices.delete(key);
     switch (button.flow) {
       case BUTTON_FLOW.RUN:
         await runCommand(ctx, button.command, '');
@@ -702,20 +813,22 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
     await ctx.reply(BOT_TEXT.ASK_REASON);
   });
 
-  bot.callbackQuery(
-    new RegExp(`^${CALLBACK.IPV_DAY}:([^:]+):(\\d{1,2})-(\\d{1,2})$`),
-    async (ctx) => {
-      const actor = actorOf(ctx);
-      const upload = uploads.get(ctx.match[1] ?? '');
-      await ctx.answerCallbackQuery();
-      if (upload?.telegramId !== actor.telegramId) {
-        await ctx.reply(BOT_TEXT.UPLOAD_EXPIRED);
-        return;
-      }
-      await removeKeyboard(ctx);
-      await loadDay(ctx, upload.source, { day: Number(ctx.match[2]), month: Number(ctx.match[3]) });
-    },
-  );
+  // "¿Quisiste decir «…»?" → Sí carga esa hoja; No vuelve a preguntar.
+  bot.callbackQuery(new RegExp(`^${CALLBACK.IPV_SHEET}:(y|n)$`), async (ctx) => {
+    const key = String(actorOf(ctx).telegramId);
+    const choice = ipvChoices.get(key);
+    await ctx.answerCallbackQuery();
+    if (choice?.step !== IPV_STEP.SUGGESTION || choice.sheet === undefined) {
+      await ctx.reply(BOT_TEXT.UPLOAD_EXPIRED);
+      return;
+    }
+    await removeKeyboard(ctx);
+    if (ctx.match[1] === 'y') {
+      await useSheet(ctx, choice.source, choice.sheets, choice.sheet);
+      return;
+    }
+    await askSheet(ctx, choice.source, choice.sheets);
+  });
 
   bot.callbackQuery(new RegExp(`^${CALLBACK.PRODUCT}:([^:]+):(\\d+)$`), async (ctx) => {
     const actor = actorOf(ctx);
@@ -819,6 +932,11 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
       );
       if (result.status !== CONFIRM_STATUS.REASON_REQUIRED) awaitingReason.delete(key);
       await ctx.reply(result.message);
+      return;
+    }
+    const ipvChoice = ipvChoices.get(key);
+    if (ipvChoice !== undefined) {
+      await answerIpvChoice(ctx, ipvChoice, text);
       return;
     }
     const flow = flows.get(key);
