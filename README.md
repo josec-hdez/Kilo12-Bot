@@ -39,7 +39,38 @@ Una venta sin costo cuenta como ganancia completa: los reportes la marcan como u
 | `socio`       | `/validar` y los reportes. Gastos y sugerencias llegan en la siguiente entrega.               |
 | `dependiente` | `/ipv`. No ve costos ni utilidades.                                                           |
 
-**Sin IA.** El bot no interpreta mensajes libres: cualquier texto que no sea un comando recibe el menú de botones del rol.
+**Sin IA.** El bot no interpreta mensajes libres: cualquier texto que no sea un comando ni un botón recibe la ayuda y el teclado del rol.
+
+### Teclado de botones y menú "/"
+
+Cada usuario ve, debajo de la barra de escritura, un **teclado fijo** con los comandos que su rol puede usar (reemplaza al teclado de letras; el ícono ⊞ de la barra alterna entre los dos). Se envía con `/start`, `/ayuda` y ante cualquier texto libre.
+
+Dueñas (el socio ve lo mismo sin 📥 IPV, 💱 TC ni ↩️ Deshacer, porque su rol no los permite; el dependiente ve solo 📥 IPV y ❓ Ayuda):
+
+```
+📅 Hoy      📆 Mes      🗓 Semana
+💰 Ganancia 💸 Gastos   📦 Inversión
+🏆 Top      📊 Margen   🔍 Producto
+📄 Fila     📍 Día      ↔️ Rango
+📥 IPV      🔎 Validar  💱 TC
+↩️ Deshacer ❓ Ayuda
+```
+
+Los botones que necesitan un dato lo preguntan:
+
+| Botón       | Qué pregunta                                                                  |
+| ----------- | ----------------------------------------------------------------------------- |
+| 📍 Día      | "¿Qué día?" con botones de los días del cuadre → `/dia`.                      |
+| ↔️ Rango    | "¿Desde?" y "¿Hasta?" (solo días posteriores) → `/rango`.                     |
+| 🔍 Producto | "¿Qué producto?": se escribe el nombre → `/producto`.                         |
+| 📄 Fila     | Nombre del producto y luego el día con botones → `/fila`.                     |
+| 🏆 Top      | Venta, Utilidad o Unidades → `/top`.                                          |
+| 💱 TC       | "¿Cuál es la TC de hoy?": se escribe el número → `/tc` con vista previa y ✅. |
+| 📥 IPV      | Pide el `.xlsx`.                                                              |
+
+Cada pregunta es solo de quien tocó el botón, vence a los 15 minutos y se abandona con `/cancelar` o tocando otro botón. Los comandos escritos (`/fila pollo 03`) siguen funcionando igual.
+
+El botón **Menú** (y escribir `/`) muestra la lista de comandos **del rol de cada usuario**: el bot la publica al arrancar y cuando el usuario envía `/start`. Quien no está registrado solo ve `/ayuda` y `/cancelar`.
 
 ## Requisitos
 
@@ -52,7 +83,7 @@ Una venta sin costo cuenta como ganancia completa: los reportes la marcan como u
 1. Abre [@BotFather](https://t.me/botfather) y envía `/newbot`.
 2. Elige un nombre y un usuario que termine en `bot` (por ejemplo, `kilo12_cuadre_bot`).
 3. BotFather entrega el **token** (`123456789:AA...`). Trátalo como una contraseña: va en `TELEGRAM_TOKEN`.
-4. Opcional, para que Telegram sugiera los comandos: `/mybots` → tu bot → **Edit Bot** → **Edit Commands**, y pega:
+4. No hace falta cargar los comandos en BotFather: el bot publica el menú "/" de cada usuario según su rol al arrancar. Si igual quieres una lista general en BotFather (`/mybots` → tu bot → **Edit Bot** → **Edit Commands**), ten en cuenta que el bot la reemplaza al arrancar por una mínima (`/ayuda`, `/cancelar`) y que cada usuario registrado ve la suya. Lista completa de referencia:
 
    ```
    ipv - Cargar el IPV del día
@@ -144,7 +175,7 @@ docker compose down            # detener
 
 - **Datos:** la base SQLite vive en `./data/kilo12.db` (usuarios, catálogo, costos, registro de cambios, copias para `/deshacer`). Usa modo WAL, así que respáldala con el bot detenido para copiar también los archivos `-wal` y `-shm`: `docker compose stop bot && mkdir -p backups && cp data/kilo12.db* backups/ && docker compose start bot`.
 - **Actualizar:** `git pull && docker compose up -d --build`. Las migraciones de la base se aplican solas al arrancar.
-- **Reinicios:** el contenedor se reinicia solo si el proceso falla. Un token inválido o una configuración incompleta detienen el bot con un mensaje claro en el log, sin reiniciarse en bucle: corrige el `.env` y vuelve a levantarlo.
+- **Reinicios:** el contenedor se reinicia solo si el proceso falla. Un token inválido, una configuración incompleta o un `CUADRE_SEED_PATH` que apunta a un archivo inexistente (por ejemplo, fuera de `data/`) detienen el bot con un mensaje claro en el log, sin reiniciarse en bucle: corrige el `.env` y vuelve a levantarlo.
 
 ## Usuarios (socios y dependientes)
 
@@ -159,6 +190,8 @@ db.prepare('INSERT OR REPLACE INTO users (telegram_id, name, role, active) VALUE
 ```
 
 Roles válidos: `dueno`, `socio`, `dependiente`. Para desactivar a alguien, pon `active` en `0`.
+
+Después de agregar a alguien, esa persona debe enviar **`/start`** al bot: recibe su teclado de botones y el menú "/" de su rol. Si cambias un rol, reinicia el bot (`docker compose restart bot`) o pide a la persona que envíe `/start` de nuevo.
 
 ## Flujo diario
 
