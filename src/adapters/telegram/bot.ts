@@ -2,8 +2,9 @@ import { Bot, GrammyError, HttpError, InlineKeyboard, type NextFunction } from '
 import type { UserFromGetMe } from 'grammy/types';
 import { AUTH_STATUS, authorize, type AuthDeps } from '../../app/authorize.js';
 import { cancelPending, confirmPending } from '../../app/confirm.js';
-import { FREE_TEXT_REPLY, helpText, menuCommandsFor } from '../../app/help.js';
+import { FREE_TEXT_REPLY, helpText } from '../../app/help.js';
 import { INTAKE_STATUS, parseDayArg, resolveIpvDay } from '../../app/ipv-intake.js';
+import { BUTTON_FLOW, buttonForText, type MenuButton } from '../../app/keyboard-menu.js';
 import { dayTab, prepareIpvLoad } from '../../app/load-ipv.js';
 import {
   CONFIRM_STATUS,
@@ -18,6 +19,7 @@ import {
   expensesReport,
   inventoryReport,
   marginsReport,
+  monthDays,
   monthReport,
   productReport,
   profitReport,
@@ -46,12 +48,15 @@ import type { SettingsRepository } from '../../ports/repositories.js';
 import { ExcelIpvSource } from '../xlsx/excel-ipv-source.js';
 import type { BotContext } from './context.js';
 import { telegramFileDownloader, type FileDownloader } from './file-downloader.js';
+import { syncUserCommandMenu } from './command-menu.js';
 import {
   CALLBACK,
   confirmKeyboard,
+  dayButtons,
   dayChoiceKeyboard,
-  menuKeyboard,
   productChoiceKeyboard,
+  replyKeyboard,
+  topMetricButtons,
 } from './keyboards.js';
 import { TtlStore } from './ttl-store.js';
 
@@ -119,7 +124,26 @@ export const BOT_TEXT = {
   CHOICE_EXPIRED: 'Esa elección ya venció (15 minutos). Repite el comando.',
   GENERIC_ERROR: '⚠️ Algo falló procesando el mensaje. No se escribió nada. Inténtalo de nuevo.',
   REPORT_ERROR: '⚠️ No pude generar el reporte',
+  ASK_DAY: '📍 ¿Qué día?',
+  ASK_FROM: '↔️ ¿Desde qué día?',
+  ASK_TO: '↔️ ¿Hasta qué día?',
+  ASK_PRODUCT: '🔍 ¿Qué producto? Escribe el nombre, por ejemplo: pollo. /cancelar para salir.',
+  ASK_ROW_PRODUCT: '📄 ¿Qué producto? Escribe el nombre, por ejemplo: pollo. /cancelar para salir.',
+  ASK_TOP: '🏆 ¿Ordenar por?',
+  ASK_TC_VALUE:
+    '💱 ¿Cuál es la TC de hoy? Escribe solo el número, por ejemplo: 780. /cancelar para salir.',
+  TC_NOT_NUMBER: 'Escribe solo el número de la TC, por ejemplo: 780. /cancelar para salir.',
+  CHOOSE_DAY_ABOVE: 'Elige el día con los botones de arriba, o /cancelar.',
+  NO_DAYS: 'Todavía no hay días en el cuadre.',
+  FLOW_CANCELLED: 'Listo, cancelado.',
+  NOTHING_TO_CANCEL: 'No había nada en curso.',
+  FLOW_EXPIRED: 'Esa pregunta ya venció (15 minutos). Toca el botón otra vez.',
 } as const;
+
+/** "📄 pollo: ¿qué día?" */
+export function rowDayPrompt(product: string): string {
+  return `📄 ${product}: ¿qué día?`;
+}
 
 /** Parte un texto largo en mensajes de Telegram, cortando por líneas. */
 export function splitMessage(text: string, max = TELEGRAM_MAX_TEXT): string[] {
@@ -167,17 +191,41 @@ async function replyLong(ctx: BotContext, text: string, keyboard?: InlineKeyboar
   }
 }
 
-/** Comando que el middleware de permisos debe revisar para este update. */
-function commandOf(ctx: BotContext): string | null {
+/** Botones de los flujos guiados → comando cuyo permiso exigen. */
+const FLOW_CALLBACK_COMMAND: Readonly<Record<string, string>> = {
+  [CALLBACK.FLOW_DAY]: '/dia',
+  [CALLBACK.FLOW_FROM]: '/rango',
+  [CALLBACK.FLOW_TO]: '/rango',
+  [CALLBACK.FLOW_ROW_DAY]: '/fila',
+  [CALLBACK.FLOW_TOP]: '/top',
+  // Elegir producto completa /fila o /producto: exige el mismo permiso.
+  [CALLBACK.PRODUCT]: '/producto',
+};
+
+/**
+ * Comando que el middleware de permisos debe revisar para este update. Un botón del
+ * teclado fijo y la respuesta a una pregunta de un flujo guiado cuentan como su comando.
+ */
+function commandOf(
+  ctx: BotContext,
+  flowCommand: (telegramId: number) => string | undefined,
+): string | null {
   if (ctx.message?.document !== undefined) return '/ipv';
   const text = ctx.message?.text;
   if (text?.startsWith('/') === true) return text.split(/\s+/)[0] ?? null;
+  if (text !== undefined) {
+    const button = buttonForText(text);
+    if (button !== undefined) return `/${button.command}`;
+    const pending = ctx.from === undefined ? undefined : flowCommand(ctx.from.id);
+    return pending === undefined ? null : `/${pending}`;
+  }
   const data = ctx.callbackQuery?.data;
-  if (data?.startsWith(`${CALLBACK.MENU}:`) === true)
-    return `/${data.slice(CALLBACK.MENU.length + 1)}`;
-  // Elegir producto completa /fila o /producto: exige el mismo permiso.
-  if (data?.startsWith(`${CALLBACK.PRODUCT}:`) === true) return '/producto';
-  return null;
+  if (data === undefined) return null;
+  const prefix = data.split(':')[0] ?? '';
+  if (prefix === CALLBACK.MENU) return `/${data.slice(CALLBACK.MENU.length + 1)}`;
+  return Object.hasOwn(FLOW_CALLBACK_COMMAND, prefix)
+    ? (FLOW_CALLBACK_COMMAND[prefix] ?? null)
+    : null;
 }
 
 function actorOf(ctx: BotContext): Actor {
@@ -217,6 +265,28 @@ interface ProductChoice {
   options: string[];
 }
 
+/** Paso de un flujo guiado del teclado que espera algo del usuario. */
+const FLOW_STEP = {
+  /** 🔍 Producto: espera el nombre. */
+  PRODUCT: 'product',
+  /** 📄 Fila: espera el nombre del producto. */
+  ROW_PRODUCT: 'row_product',
+  /** 📄 Fila: ya tiene el producto, espera el día (botones). */
+  ROW_DAY: 'row_day',
+  /** 💱 TC: espera el número. */
+  TC: 'tc',
+} as const;
+
+type FlowStep = (typeof FLOW_STEP)[keyof typeof FLOW_STEP];
+
+interface GuidedFlow {
+  step: FlowStep;
+  /** Comando cuyo permiso se exige al responder. */
+  command: string;
+  /** Producto elegido en 📄 Fila. */
+  product?: string;
+}
+
 export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotContext> {
   const bot = new Bot<BotContext>(
     options.token,
@@ -226,6 +296,9 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
   const uploads = new TtlStore<UploadedIpv>(CONVERSATION_TTL_MS, clock);
   const awaitingReason = new TtlStore<AwaitingReason>(CONVERSATION_TTL_MS, clock);
   const productChoices = new TtlStore<ProductChoice>(CONVERSATION_TTL_MS, clock);
+  /** Flujo guiado en curso, por usuario: cada uno responde solo a sus preguntas. */
+  const flows = new TtlStore<GuidedFlow>(CONVERSATION_TTL_MS, clock);
+  const flowCommand = (telegramId: number) => flows.get(String(telegramId))?.command;
   const download = deps.downloadFile ?? telegramFileDownloader(bot.api, options.token);
 
   // ------------------------------------------------------------ permisos
@@ -235,7 +308,7 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
     const result = authorize(deps.auth, {
       telegramId: from.id,
       username: from.username ?? null,
-      command: commandOf(ctx),
+      command: commandOf(ctx, flowCommand),
     });
     if (result.status === AUTH_STATUS.ALLOWED) {
       ctx.kiloUser = result.user;
@@ -295,9 +368,15 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
     await replyLong(ctx, text);
   }
 
+  /** /ayuda (y /start): la lista del rol y el teclado fijo de botones. */
   async function help(ctx: BotContext): Promise<void> {
     const role = actorOf(ctx).role;
-    await ctx.reply(helpText(role), { reply_markup: menuKeyboard(menuCommandsFor(role)) });
+    await ctx.reply(helpText(role), { reply_markup: replyKeyboard(role) });
+  }
+
+  /** Días del cuadre para los botones de los flujos guiados. */
+  async function dayTabs(): Promise<string[]> {
+    return monthDays((await deps.cuadre.listDays()).map((day) => day.trim()));
   }
 
   // Las equivalencias se leen en cada reporte: cambian con /equivalencia.
@@ -415,42 +494,6 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
     }
   });
 
-  // ------------------------------------------------------------ comandos
-  bot.command(['start', 'ayuda'], help);
-
-  bot.command('ipv', async (ctx) => {
-    await ctx.reply(ctx.match.trim() === '' ? BOT_TEXT.ASK_IPV_FILE : BOT_TEXT.NO_DRIVE);
-  });
-
-  bot.command('validar', async (ctx) => {
-    await validate(ctx, ctx.match);
-  });
-
-  bot.command('tc', async (ctx) => {
-    const [rawValue = '', rawTab = ''] = ctx.match.trim().split(/\s+/);
-    const tc = parseTcValue(rawValue);
-    const tab =
-      rawTab === ''
-        ? dayTab(todayIn(clock(), deps.timezone))
-        : /^\d{1,2}$/.test(rawTab)
-          ? rawTab.padStart(2, '0')
-          : null;
-    if (tc === null || tab === null) {
-      await ctx.reply(BOT_TEXT.TC_USAGE);
-      return;
-    }
-    await showPrepared(ctx, await prepareSetTc(deps.pipeline, actorOf(ctx), { tab, tc }));
-  });
-
-  bot.command('deshacer', async (ctx) => {
-    await showPrepared(ctx, prepareUndo(deps.pipeline, actorOf(ctx)));
-  });
-
-  bot.command('cancelar', async (ctx) => {
-    awaitingReason.delete(String(actorOf(ctx).telegramId));
-    await ctx.reply(BOT_TEXT.REASON_CANCELLED);
-  });
-
   // ------------------------------------------------------------ reportes
   const reports: Readonly<Record<string, (args: string) => Promise<ReportResult>>> = {
     hoy: () => todayReport(reportDeps(), todayTab()),
@@ -466,13 +509,167 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
     fila: (args) => rowReport(reportDeps(), args),
     producto: (args) => productReport(reportDeps(), args),
   };
-  for (const [command, run] of Object.entries(reports)) {
+
+  // ------------------------------------------------------------ comandos
+  async function setTc(ctx: BotContext, args: string): Promise<void> {
+    const [rawValue = '', rawTab = ''] = args.trim().split(/\s+/);
+    const tc = parseTcValue(rawValue);
+    const tab =
+      rawTab === ''
+        ? dayTab(todayIn(clock(), deps.timezone))
+        : /^\d{1,2}$/.test(rawTab)
+          ? rawTab.padStart(2, '0')
+          : null;
+    if (tc === null || tab === null) {
+      await ctx.reply(BOT_TEXT.TC_USAGE);
+      return;
+    }
+    await showPrepared(ctx, await prepareSetTc(deps.pipeline, actorOf(ctx), { tab, tc }));
+  }
+
+  async function cancel(ctx: BotContext): Promise<void> {
+    const key = String(actorOf(ctx).telegramId);
+    const hadReason = awaitingReason.get(key) !== undefined;
+    const hadFlow = flows.get(key) !== undefined;
+    awaitingReason.delete(key);
+    flows.delete(key);
+    if (hadReason) await ctx.reply(BOT_TEXT.REASON_CANCELLED);
+    else if (hadFlow) await ctx.reply(BOT_TEXT.FLOW_CANCELLED);
+    else await ctx.reply(BOT_TEXT.NOTHING_TO_CANCEL);
+  }
+
+  /**
+   * Un solo punto de entrada por comando: lo usan los comandos escritos, los botones
+   * del teclado y los del menú en línea de versiones anteriores.
+   */
+  async function runCommand(ctx: BotContext, command: string, args: string): Promise<void> {
+    const report = Object.hasOwn(reports, command) ? reports[command] : undefined;
+    if (report !== undefined) {
+      await runReport(ctx, command, () => report(args));
+      return;
+    }
+    switch (command) {
+      case 'ipv':
+        await ctx.reply(args.trim() === '' ? BOT_TEXT.ASK_IPV_FILE : BOT_TEXT.NO_DRIVE);
+        return;
+      case 'validar':
+        await validate(ctx, args);
+        return;
+      case 'tc':
+        await setTc(ctx, args);
+        return;
+      case 'deshacer':
+        await showPrepared(ctx, prepareUndo(deps.pipeline, actorOf(ctx)));
+        return;
+      case 'cancelar':
+        await cancel(ctx);
+        return;
+      default:
+        await help(ctx);
+    }
+  }
+
+  bot.command('start', async (ctx) => {
+    // Al abrir el bot (o después de que lo agreguen) se le publica su menú "/".
+    const user = ctx.kiloUser;
+    if (user !== undefined) void syncUserCommandMenu(ctx.api, user).catch(() => undefined);
+    await help(ctx);
+  });
+  for (const command of [
+    'ayuda',
+    'ipv',
+    'validar',
+    'tc',
+    'deshacer',
+    'cancelar',
+    ...Object.keys(reports),
+  ]) {
     bot.command(command, async (ctx) => {
-      await runReport(ctx, command, () => run(ctx.match));
+      await runCommand(ctx, command, ctx.match);
     });
   }
 
-  // ------------------------------------------------------------ botones
+  // ------------------------------------------------------------ teclado fijo
+  /** Un botón del teclado: lo ejecuta o abre su pregunta. Reemplaza cualquier flujo previo. */
+  async function pressButton(ctx: BotContext, button: MenuButton): Promise<void> {
+    const key = String(actorOf(ctx).telegramId);
+    flows.delete(key);
+    switch (button.flow) {
+      case BUTTON_FLOW.RUN:
+        await runCommand(ctx, button.command, '');
+        return;
+      case BUTTON_FLOW.ASK_IPV:
+        await ctx.reply(BOT_TEXT.ASK_IPV_FILE);
+        return;
+      case BUTTON_FLOW.ASK_TC:
+        flows.set(key, { step: FLOW_STEP.TC, command: button.command });
+        await ctx.reply(BOT_TEXT.ASK_TC_VALUE);
+        return;
+      case BUTTON_FLOW.ASK_PRODUCT:
+        flows.set(key, { step: FLOW_STEP.PRODUCT, command: button.command });
+        await ctx.reply(BOT_TEXT.ASK_PRODUCT);
+        return;
+      case BUTTON_FLOW.ASK_ROW:
+        flows.set(key, { step: FLOW_STEP.ROW_PRODUCT, command: button.command });
+        await ctx.reply(BOT_TEXT.ASK_ROW_PRODUCT);
+        return;
+      case BUTTON_FLOW.ASK_TOP_METRIC:
+        await ctx.reply(BOT_TEXT.ASK_TOP, { reply_markup: topMetricButtons() });
+        return;
+      case BUTTON_FLOW.ASK_DAY:
+      case BUTTON_FLOW.ASK_RANGE: {
+        const days = await withTyping(ctx, dayTabs);
+        if (days.length === 0) {
+          await ctx.reply(BOT_TEXT.NO_DAYS);
+          return;
+        }
+        const ask = button.flow === BUTTON_FLOW.ASK_DAY;
+        await ctx.reply(ask ? BOT_TEXT.ASK_DAY : BOT_TEXT.ASK_FROM, {
+          reply_markup: dayButtons(ask ? CALLBACK.FLOW_DAY : CALLBACK.FLOW_FROM, days),
+        });
+        return;
+      }
+    }
+  }
+
+  /** Respuesta escrita a la pregunta de un flujo guiado. */
+  async function answerFlow(ctx: BotContext, flow: GuidedFlow, answer: string): Promise<void> {
+    const key = String(actorOf(ctx).telegramId);
+    switch (flow.step) {
+      case FLOW_STEP.PRODUCT:
+        flows.delete(key);
+        await runCommand(ctx, 'producto', answer);
+        return;
+      case FLOW_STEP.ROW_PRODUCT: {
+        const days = await withTyping(ctx, dayTabs);
+        if (days.length === 0) {
+          flows.delete(key);
+          await ctx.reply(BOT_TEXT.NO_DAYS);
+          return;
+        }
+        flows.set(key, { step: FLOW_STEP.ROW_DAY, command: flow.command, product: answer });
+        await ctx.reply(rowDayPrompt(answer), {
+          reply_markup: dayButtons(CALLBACK.FLOW_ROW_DAY, days),
+        });
+        return;
+      }
+      case FLOW_STEP.ROW_DAY:
+        await ctx.reply(BOT_TEXT.CHOOSE_DAY_ABOVE);
+        return;
+      case FLOW_STEP.TC: {
+        const tc = parseTcValue(answer);
+        if (tc === null) {
+          await ctx.reply(BOT_TEXT.TC_NOT_NUMBER);
+          return;
+        }
+        flows.delete(key);
+        await setTc(ctx, String(tc));
+        return;
+      }
+    }
+  }
+
+  // ------------------------------------------------------------ botones en línea
   bot.callbackQuery(new RegExp(`^${CALLBACK.CONFIRM}:(.+)$`), async (ctx) => {
     const pendingId = ctx.match[1] ?? '';
     // Confirmar escribe en la hoja: puede tardar unos segundos.
@@ -535,40 +732,79 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
     );
   });
 
+  // 📍 Día → /dia DD
+  bot.callbackQuery(new RegExp(`^${CALLBACK.FLOW_DAY}:(\\S+)$`), async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await removeKeyboard(ctx);
+    await runCommand(ctx, 'dia', ctx.match[1] ?? '');
+  });
+
+  // ↔️ Rango, primer paso: "¿Hasta?" con los días desde el elegido.
+  bot.callbackQuery(new RegExp(`^${CALLBACK.FLOW_FROM}:(\\S+)$`), async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await removeKeyboard(ctx);
+    const from = ctx.match[1] ?? '';
+    const days = await dayTabs();
+    const start = days.indexOf(from);
+    if (start < 0) {
+      await ctx.reply(BOT_TEXT.FLOW_EXPIRED);
+      return;
+    }
+    await ctx.reply(BOT_TEXT.ASK_TO, {
+      reply_markup: dayButtons(`${CALLBACK.FLOW_TO}:${from}`, days.slice(start)),
+    });
+  });
+
+  // ↔️ Rango, segundo paso → /rango DD DD
+  bot.callbackQuery(new RegExp(`^${CALLBACK.FLOW_TO}:([^:]+):(\\S+)$`), async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await removeKeyboard(ctx);
+    await runCommand(ctx, 'rango', `${ctx.match[1] ?? ''} ${ctx.match[2] ?? ''}`);
+  });
+
+  // 📄 Fila, día elegido → /fila <producto> DD
+  bot.callbackQuery(new RegExp(`^${CALLBACK.FLOW_ROW_DAY}:(\\S+)$`), async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const key = String(actorOf(ctx).telegramId);
+    const flow = flows.get(key);
+    if (flow?.step !== FLOW_STEP.ROW_DAY || flow.product === undefined) {
+      await ctx.reply(BOT_TEXT.FLOW_EXPIRED);
+      return;
+    }
+    flows.delete(key);
+    await removeKeyboard(ctx);
+    await runCommand(ctx, 'fila', `${flow.product} ${ctx.match[1] ?? ''}`);
+  });
+
+  // 🏆 Top → /top <métrica>
+  bot.callbackQuery(new RegExp(`^${CALLBACK.FLOW_TOP}:(\\w+)$`), async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await removeKeyboard(ctx);
+    await runCommand(ctx, 'top', ctx.match[1] ?? '');
+  });
+
+  // Menú en línea de versiones anteriores: sigue funcionando desde el historial del chat.
   bot.callbackQuery(new RegExp(`^${CALLBACK.MENU}:(\\w+)$`), async (ctx) => {
     await ctx.answerCallbackQuery();
     const command = ctx.match[1] ?? '';
-    const report = Object.hasOwn(reports, command) ? reports[command] : undefined;
-    if (report !== undefined) {
-      await runReport(ctx, command, () => report(''));
-      return;
-    }
-    switch (command) {
-      case 'ipv':
-        await ctx.reply(BOT_TEXT.ASK_IPV_FILE);
-        return;
-      case 'validar':
-        await validate(ctx, '');
-        return;
-      case 'tc':
-        await ctx.reply(BOT_TEXT.TC_USAGE);
-        return;
-      case 'deshacer':
-        await showPrepared(ctx, prepareUndo(deps.pipeline, actorOf(ctx)));
-        return;
-      default:
-        await help(ctx);
-    }
+    await runCommand(ctx, command, '');
   });
 
   bot.on('callback_query:data', async (ctx) => {
     await ctx.answerCallbackQuery({ text: 'Ese botón ya no es válido.' });
   });
 
-  // ------------------------------------------------------------ texto libre
+  // ------------------------------------------------------------ texto
   bot.on('message:text', async (ctx) => {
-    if (ctx.message.text.startsWith('/')) {
+    const text = ctx.message.text;
+    if (text.startsWith('/')) {
       await ctx.reply(BOT_TEXT.UNKNOWN_COMMAND);
+      return;
+    }
+    // Los botones del teclado ganan siempre: tocar uno nunca se toma como respuesta.
+    const button = buttonForText(text);
+    if (button !== undefined) {
+      await pressButton(ctx, button);
       return;
     }
     const actor = actorOf(ctx);
@@ -578,14 +814,19 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
       const result = await withTyping(ctx, () =>
         confirmPending(deps.pipeline, actor, {
           pendingId: waiting.pendingId,
-          forceReason: ctx.message.text,
+          forceReason: text,
         }),
       );
       if (result.status !== CONFIRM_STATUS.REASON_REQUIRED) awaitingReason.delete(key);
       await ctx.reply(result.message);
       return;
     }
-    await ctx.reply(FREE_TEXT_REPLY, { reply_markup: menuKeyboard(menuCommandsFor(actor.role)) });
+    const flow = flows.get(key);
+    if (flow !== undefined) {
+      await answerFlow(ctx, flow, text.trim());
+      return;
+    }
+    await ctx.reply(FREE_TEXT_REPLY, { reply_markup: replyKeyboard(actor.role) });
   });
 
   // ------------------------------------------------------------ errores
