@@ -112,6 +112,10 @@ export class ExcelIpvSource implements IpvSource {
     return new ExcelIpvSource(workbook);
   }
 
+  listSheets(): string[] {
+    return this.workbook.worksheets.map((sheet) => sheet.name);
+  }
+
   listDays(): IpvTabRef[] {
     return this.workbook.worksheets.flatMap((sheet) => {
       const parsed = parseIpvTabDate(sheet.name);
@@ -127,6 +131,15 @@ export class ExcelIpvSource implements IpvSource {
     const sheet = tabName === null ? undefined : this.workbook.getWorksheet(tabName);
     if (tabName === null || sheet === undefined) {
       throw new IpvFormatError(`El IPV no tiene la pestaña del ${formatDayRef(ref)}`);
+    }
+    return readSheet(sheet, { day: ref.day, month: ref.month, tabName });
+  }
+
+  readSheet(tabName: string, ref: DayRef): IpvDay {
+    const sheet = this.workbook.getWorksheet(tabName);
+    // getWorksheet ignora mayúsculas: se exige el nombre exacto.
+    if (sheet?.name !== tabName) {
+      throw new IpvFormatError(`El IPV no tiene la hoja «${tabName}»`);
     }
     return readSheet(sheet, { day: ref.day, month: ref.month, tabName });
   }
