@@ -1,6 +1,9 @@
 import { parseTc, TC_LABEL_CELL, TC_VALUE_CELL } from '../core/cuadre-layout.js';
+import { can, PERMISSION } from '../core/auth.js';
 import { PENDING_KIND, SNAPSHOT_KIND, type RangeSnapshot } from '../ports/repositories.js';
-import { RENDER, type CellValue, type Grid } from '../ports/sheets-gateway.js';
+import { RENDER, type CellValue, type Grid, type SheetsGateway } from '../ports/sheets-gateway.js';
+import { closedMonthBlocker, isMonthClosed } from './closed-months.js';
+import { bookOfWrite, noBookMessage } from './cuadre-books.js';
 import type { SetTcPayload } from './pending-payloads.js';
 import {
   PREPARE_STATUS,
@@ -28,8 +31,8 @@ interface TcCells {
   value: CellValue;
 }
 
-async function readTcCells(deps: PipelineDeps, tab: string): Promise<TcCells> {
-  const [grid = []] = await deps.sheets.readRanges([{ tab, a1: TC_RANGE }], RENDER.FORMULA);
+async function readTcCells(sheets: SheetsGateway, tab: string): Promise<TcCells> {
+  const [grid = []] = await sheets.readRanges([{ tab, a1: TC_RANGE }], RENDER.FORMULA);
   const [[label = '', value = ''] = []] = padGrid(grid, 1, 2);
   return { label, value };
 }
@@ -46,7 +49,7 @@ const knownLayout = (label: CellValue): boolean =>
 export async function prepareSetTc(
   deps: PipelineDeps,
   actor: Actor,
-  { tab, tc }: SetTcPayload,
+  { tab, tc, month }: SetTcPayload,
 ): Promise<PrepareResult> {
   if (!Number.isFinite(tc) || tc <= 0) {
     return {
@@ -54,7 +57,14 @@ export async function prepareSetTc(
       message: 'La TC tiene que ser un número mayor que 0.',
     };
   }
-  const tabs = await deps.sheets.listTabs();
+  const book = bookOfWrite(deps.books, month);
+  if (book === null) {
+    return {
+      status: PREPARE_STATUS.REJECTED,
+      message: noBookMessage(month ?? deps.books.defaultMonth),
+    };
+  }
+  const tabs = await book.sheets.listTabs();
   if (!tabs.some((existing) => existing.title === tab)) {
     return {
       status: PREPARE_STATUS.REJECTED,
@@ -62,7 +72,7 @@ export async function prepareSetTc(
     };
   }
 
-  const current = await readTcCells(deps, tab);
+  const current = await readTcCells(book.sheets, tab);
   if (!knownLayout(current.label)) {
     return {
       status: PREPARE_STATUS.REJECTED,
@@ -71,7 +81,20 @@ export async function prepareSetTc(
   }
 
   const previous = parseTc(current.label, current.value);
-  const payload: SetTcPayload = { tab, tc };
+  const base = `💱 TC de la pestaña ${tab}: ${previous === null ? 'vacía' : fmt(previous)} → ${fmt(tc)} CUP por USD`;
+  // Un mes cerrado con /cierremes se escribe solo forzando (dueña + motivo).
+  const closed = isMonthClosed(deps.settings, book.month) ? closedMonthBlocker(book.month) : null;
+  const preview = closed === null ? base : `${base}\n\n🔒 ${closed}.`;
+  if (closed !== null && !can(actor.role, PERMISSION.FORCE_CONFIRM)) {
+    return { status: PREPARE_STATUS.BLOCKED, preview };
+  }
+
+  const payload: SetTcPayload = {
+    tab,
+    tc,
+    month: book.month,
+    ...(closed === null ? {} : { blockers: [closed] }),
+  };
   const action = deps.pending.create({
     telegramId: actor.telegramId,
     kind: PENDING_KIND.SET_TC,
@@ -80,8 +103,8 @@ export async function prepareSetTc(
   return {
     status: PREPARE_STATUS.READY,
     pendingId: action.id,
-    preview: `💱 TC de la pestaña ${tab}: ${previous === null ? 'vacía' : fmt(previous)} → ${fmt(tc)} CUP por USD`,
-    requiresForce: false,
+    preview,
+    requiresForce: closed !== null,
   };
 }
 
@@ -89,9 +112,11 @@ export async function prepareSetTc(
 export async function executeSetTc(
   deps: PipelineDeps,
   telegramId: number,
-  { tab, tc }: SetTcPayload,
+  { tab, tc, month }: SetTcPayload,
 ): Promise<ExecutionResult> {
-  const current = await readTcCells(deps, tab);
+  const book = bookOfWrite(deps.books, month);
+  if (book === null) return { ok: false, message: noBookMessage(month ?? deps.books.defaultMonth) };
+  const current = await readTcCells(book.sheets, tab);
   if (!knownLayout(current.label)) {
     return {
       ok: false,
@@ -104,16 +129,16 @@ export async function executeSetTc(
     telegramId,
     action: 'set_tc',
     target: tab,
-    detail: { previous: parseTc(current.label, current.value), tc },
+    detail: { month: book.month, previous: parseTc(current.label, current.value), tc },
   });
   const snapshot = deps.snapshots.create({
     changeLogId,
     telegramId,
-    payload: { kind: SNAPSHOT_KIND.CELLS, tab, ranges: [before] },
+    payload: { kind: SNAPSHOT_KIND.CELLS, tab, ranges: [before], month: book.month },
   });
 
   try {
-    await deps.sheets.writeRanges([{ tab, a1: TC_RANGE, values: [[TC_LABEL, tc]] }]);
+    await book.sheets.writeRanges([{ tab, a1: TC_RANGE, values: [[TC_LABEL, tc]] }]);
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     deps.snapshots.markReverted(snapshot.id);

@@ -3,11 +3,14 @@ import { checkIpvSales, computeTotals } from '../core/calc.js';
 import { buildLastKnownCosts, cuadreTabsBefore, type CostSource } from '../core/costs.js';
 import { buildCuadreDraft } from '../core/cuadre-builder.js';
 import { TC_VALUE_CELL } from '../core/cuadre-layout.js';
+import type { MonthKey } from '../core/months.js';
 import { formatDayRef } from '../core/tabs.js';
 import type { DayRef, IpvDay } from '../core/types.js';
 import { ipvLoadBlockers, salesFindings, sortFindings, validateIpv } from '../core/validations.js';
 import { PENDING_KIND, SNAPSHOT_KIND } from '../ports/repositories.js';
 import { YELLOW } from '../ports/sheets-gateway.js';
+import { closedMonthBlocker, isMonthClosed } from './closed-months.js';
+import { bookOfWrite, noBookMessage, previousBook } from './cuadre-books.js';
 import type { LoadIpvPayload } from './pending-payloads.js';
 import {
   PREPARE_STATUS,
@@ -17,7 +20,12 @@ import {
   type PrepareResult,
 } from './pipeline-types.js';
 import { loadIpvPreview } from './previews.js';
-import { ensureTemplate, syncConfigTab, TEMPLATE_TAB } from './sheet-structure.js';
+import {
+  ensureSummaryTab,
+  ensureTemplate,
+  syncConfigTab,
+  TEMPLATE_TAB,
+} from './sheet-structure.js';
 
 /** Pestaña del cuadre de un día: `03`. */
 export function dayTab(ref: DayRef): string {
@@ -26,6 +34,8 @@ export function dayTab(ref: DayRef): string {
 
 export interface LoadIpvRequest {
   ipv: IpvDay;
+  /** Mes del día (`2026-11`): la pestaña se crea en el libro de ese mes. */
+  month: MonthKey;
   /** TC del día si ya se conoce; si no, queda vacía y se fija con /tc. */
   tc: number | null;
 }
@@ -37,10 +47,13 @@ export interface LoadIpvRequest {
 export async function prepareIpvLoad(
   deps: PipelineDeps,
   actor: Actor,
-  { ipv, tc }: LoadIpvRequest,
+  { ipv, tc, month }: LoadIpvRequest,
 ): Promise<PrepareResult> {
+  const book = deps.books.forMonth(month);
+  if (book === null) return { status: PREPARE_STATUS.REJECTED, message: noBookMessage(month) };
+
   const tab = dayTab(ipv);
-  const tabs = await deps.sheets.listTabs();
+  const tabs = await book.sheets.listTabs();
   if (tabs.some((existing) => existing.title === tab)) {
     return {
       status: PREPARE_STATUS.REJECTED,
@@ -50,8 +63,14 @@ export async function prepareIpvLoad(
 
   let cuadreCosts: CostSource[][];
   try {
-    const previous = cuadreTabsBefore(await deps.cuadre.listDays(), ipv.day);
-    cuadreCosts = (await deps.cuadre.readDays(previous)).map((sheet) => sheet.rows);
+    // Último costo conocido: todo el mes anterior (otro libro) y los días previos de este.
+    const before = previousBook(deps.books, book);
+    const earlier =
+      before === null ? [] : await before.cuadre.readDays(await before.cuadre.listDays());
+    const previous = cuadreTabsBefore(await book.cuadre.listDays(), ipv.day);
+    cuadreCosts = [...earlier, ...(await book.cuadre.readDays(previous))].map(
+      (sheet) => sheet.rows,
+    );
   } catch (error) {
     return {
       status: PREPARE_STATUS.REJECTED,
@@ -73,9 +92,12 @@ export async function prepareIpvLoad(
   const ipvFindings = validateIpv(ipv);
   const blockers = ipvLoadBlockers(ipvFindings, sales);
   const alerts = sortFindings([...ipvFindings, ...salesFindings(sales, formatDayRef(ipv))]);
-  const canForce = blockers.length > 0 && can(actor.role, PERMISSION.FORCE_CONFIRM);
+  // Un mes cerrado con /cierremes se escribe solo forzando (dueña + motivo).
+  const closed = isMonthClosed(deps.settings, month) ? closedMonthBlocker(month) : null;
+  const blocked = blockers.length > 0 || closed !== null;
+  const canForce = blocked && can(actor.role, PERMISSION.FORCE_CONFIRM);
 
-  const preview = loadIpvPreview({
+  const draftPreview = loadIpvPreview({
     tab,
     ipvTab: ipv.tabName.trim(),
     draft,
@@ -87,18 +109,23 @@ export async function prepareIpvLoad(
     showFinancials: can(actor.role, PERMISSION.VIEW_FINANCIALS),
     canForce,
   });
+  const preview = closed === null ? draftPreview : `${draftPreview}\n\n🔒 ${closed}.`;
 
-  if (blockers.length > 0 && !canForce) return { status: PREPARE_STATUS.BLOCKED, preview };
+  if (blocked && !canForce) return { status: PREPARE_STATUS.BLOCKED, preview };
 
   const payload: LoadIpvPayload = {
     tab,
+    month,
     ipvTab: ipv.tabName.trim(),
     sheetValues: draft.sheetValues,
     yellowCells: draft.yellowCells,
     tc,
     ventaTotal: totals.ventaTotal,
     utilidadBruta: totals.utilidadBruta,
-    blockers: blockers.map((f) => (f.product === null ? f.detail : `${f.product}: ${f.detail}`)),
+    blockers: [
+      ...blockers.map((f) => (f.product === null ? f.detail : `${f.product}: ${f.detail}`)),
+      ...(closed === null ? [] : [closed]),
+    ],
   };
   const action = deps.pending.create({
     telegramId: actor.telegramId,
@@ -109,7 +136,7 @@ export async function prepareIpvLoad(
     status: PREPARE_STATUS.READY,
     pendingId: action.id,
     preview,
-    requiresForce: blockers.length > 0,
+    requiresForce: blocked,
   };
 }
 
@@ -118,7 +145,7 @@ const errorText = (error: unknown): string =>
 
 /**
  * Paso 2, ya confirmado: snapshot → log → `_plantilla` → duplicar a `DD` → valores →
- * TC → amarillo → `_config`. Si algo falla, borra la pestaña que alcanzó a crear.
+ * TC → amarillo → `_config` y `Resumen`. Si algo falla, borra la pestaña que alcanzó a crear.
  */
 export async function executeIpvLoad(
   deps: PipelineDeps,
@@ -126,14 +153,20 @@ export async function executeIpvLoad(
   payload: LoadIpvPayload,
   forceReason: string | null,
 ): Promise<ExecutionResult> {
-  const { sheets, changeLog, snapshots } = deps;
-  const { tab } = payload;
+  const { changeLog, snapshots } = deps;
+  const { tab, month } = payload;
+  const book = bookOfWrite(deps.books, month);
+  if (book === null) {
+    return { ok: false, message: noBookMessage(month ?? deps.books.defaultMonth) };
+  }
+  const { sheets } = book;
 
   const changeLogId = changeLog.record({
     telegramId,
     action: 'load_ipv',
     target: tab,
     detail: {
+      month: book.month,
       ipvTab: payload.ipvTab,
       ventaTotal: payload.ventaTotal,
       utilidadBruta: payload.utilidadBruta,
@@ -145,7 +178,7 @@ export async function executeIpvLoad(
   const snapshot = snapshots.create({
     changeLogId,
     telegramId,
-    payload: { kind: SNAPSHOT_KIND.CREATE_TAB, tab },
+    payload: { kind: SNAPSHOT_KIND.CREATE_TAB, tab, month: book.month },
   });
 
   let created = false;
@@ -175,12 +208,17 @@ export async function executeIpvLoad(
     return { ok: false, message: `No se pudo crear la pestaña ${tab}: ${errorText(error)}` };
   }
 
-  // `_config` es un espejo: si falla, la carga del día sigue siendo válida.
+  // `_config` y `Resumen` son espejos: si fallan, la carga del día sigue siendo válida.
   let configNote = '';
   try {
     await syncConfigTab(sheets, deps.catalog.listProducts(), deps.clock());
   } catch (error) {
     configNote = `\n⚠️ No se pudo actualizar _config: ${errorText(error)}`;
+  }
+  try {
+    await ensureSummaryTab(sheets);
+  } catch (error) {
+    configNote += `\n⚠️ No se pudo crear la pestaña Resumen: ${errorText(error)}`;
   }
 
   const yellow =

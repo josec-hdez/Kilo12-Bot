@@ -46,11 +46,19 @@ function unresolved(result: Exclude<ResolveResult, { status: 'ok' }>): ConfirmRe
   }
 }
 
-/** Bloqueos de una carga de IPV: vacío si no es carga o si se puede confirmar. */
+/** Bloqueos guardados en la acción (carga con errores, mes cerrado): vacío si no tiene. */
 function blockersOf(action: PendingAction): string[] {
-  return action.kind === PENDING_KIND.LOAD_IPV && isLoadIpvPayload(action.payload)
-    ? action.payload.blockers
-    : [];
+  const { payload } = action;
+  switch (action.kind) {
+    case PENDING_KIND.LOAD_IPV:
+      return isLoadIpvPayload(payload) ? payload.blockers : [];
+    case PENDING_KIND.SET_TC:
+      return isSetTcPayload(payload) ? (payload.blockers ?? []) : [];
+    case PENDING_KIND.UNDO:
+      return isUndoPayload(payload) ? (payload.blockers ?? []) : [];
+    default:
+      return [];
+  }
 }
 
 /**

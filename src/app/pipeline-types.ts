@@ -4,10 +4,10 @@ import type {
   ChangeLogRepository,
   Clock,
   PendingActionRepository,
+  SettingsRepository,
   SnapshotRepository,
 } from '../ports/repositories.js';
-import type { CuadreReader } from '../ports/cuadre-source.js';
-import type { SheetsGateway } from '../ports/sheets-gateway.js';
+import type { CuadreBooks } from '../ports/cuadre-books.js';
 
 /**
  * Único camino de escritura en la hoja: vista previa → confirmación → snapshot →
@@ -15,11 +15,15 @@ import type { SheetsGateway } from '../ports/sheets-gateway.js';
  */
 
 export interface PipelineDeps {
-  sheets: SheetsGateway;
+  /**
+   * Un libro de cuadre por mes. Cada escritura va al libro del mes de su día; de sus
+   * pestañas (y de las del mes anterior) sale el último costo conocido al cargar el IPV.
+   */
+  books: CuadreBooks;
+  /** Configuración: de aquí salen los meses cerrados con /cierremes. */
+  settings: SettingsRepository;
   pending: PendingActionRepository;
   catalog: CatalogRepository;
-  /** Lectura del cuadre: de sus pestañas sale el último costo conocido al cargar el IPV. */
-  cuadre: CuadreReader;
   changeLog: ChangeLogRepository;
   snapshots: SnapshotRepository;
   clock: Clock;

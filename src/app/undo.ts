@@ -1,5 +1,7 @@
 import { can, PERMISSION } from '../core/auth.js';
 import { PENDING_KIND, SNAPSHOT_KIND, type Snapshot } from '../ports/repositories.js';
+import { closedMonthBlocker, isMonthClosed } from './closed-months.js';
+import { bookOfWrite, noBookMessage } from './cuadre-books.js';
 import type { UndoPayload } from './pending-payloads.js';
 import {
   PREPARE_STATUS,
@@ -32,7 +34,19 @@ export function prepareUndo(deps: PipelineDeps, actor: Actor): PrepareResult {
   if (snapshot === undefined) {
     return { status: PREPARE_STATUS.REJECTED, message: 'No hay escrituras para deshacer.' };
   }
-  const payload: UndoPayload = { snapshotId: snapshot.id };
+  // Un mes cerrado con /cierremes se cambia solo forzando (dueña + motivo).
+  const month = snapshot.payload.month ?? deps.books.defaultMonth;
+  const closed = isMonthClosed(deps.settings, month) ? closedMonthBlocker(month) : null;
+  const base = `↩️ Deshacer: ${describe(snapshot)}`;
+  const preview = closed === null ? base : `${base}\n\n🔒 ${closed}.`;
+  if (closed !== null && !can(actor.role, PERMISSION.FORCE_CONFIRM)) {
+    return { status: PREPARE_STATUS.BLOCKED, preview };
+  }
+
+  const payload: UndoPayload = {
+    snapshotId: snapshot.id,
+    ...(closed === null ? {} : { blockers: [closed] }),
+  };
   const action = deps.pending.create({
     telegramId: actor.telegramId,
     kind: PENDING_KIND.UNDO,
@@ -41,8 +55,8 @@ export function prepareUndo(deps: PipelineDeps, actor: Actor): PrepareResult {
   return {
     status: PREPARE_STATUS.READY,
     pendingId: action.id,
-    preview: `↩️ Deshacer: ${describe(snapshot)}`,
-    requiresForce: false,
+    preview,
+    requiresForce: closed !== null,
   };
 }
 
@@ -57,14 +71,19 @@ export async function executeUndo(
   }
 
   const { payload } = snapshot;
+  const book = bookOfWrite(deps.books, payload.month);
+  if (book === null) {
+    return { ok: false, message: noBookMessage(payload.month ?? deps.books.defaultMonth) };
+  }
+  const { sheets } = book;
   let note = '';
   try {
     if (payload.kind === SNAPSHOT_KIND.CREATE_TAB) {
-      const tabs = await deps.sheets.listTabs();
-      if (tabs.some((tab) => tab.title === payload.tab)) await deps.sheets.deleteTab(payload.tab);
+      const tabs = await sheets.listTabs();
+      if (tabs.some((tab) => tab.title === payload.tab)) await sheets.deleteTab(payload.tab);
       else note = ` La pestaña ${payload.tab} ya no existía.`;
     } else {
-      await deps.sheets.writeRanges(
+      await sheets.writeRanges(
         payload.ranges.map(({ a1, values }) => ({ tab: payload.tab, a1, values })),
       );
     }
