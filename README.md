@@ -213,13 +213,14 @@ mkdir -p data
 #   data/cuadre.xlsx           → CUADRE_SEED_PATH=/app/data/cuadre.xlsx
 sudo chown -R 1000:1000 data   # el contenedor corre como el usuario node (uid 1000)
 
-docker compose up -d --build   # construir y levantar
+./scripts/deploy.sh            # traer main, construir con la versión y levantar
 docker compose logs -f bot     # ver el log
 docker compose down            # detener
 ```
 
 - **Datos:** la base SQLite vive en `./data/kilo12.db` (usuarios, catálogo, costos, registro de cambios, copias para `/deshacer`). Usa modo WAL, así que respáldala con el bot detenido para copiar también los archivos `-wal` y `-shm`: `docker compose stop bot && mkdir -p backups && cp data/kilo12.db* backups/ && docker compose start bot`.
-- **Actualizar:** `git pull && docker compose up -d --build`. Las migraciones de la base se aplican solas al arrancar.
+- **Actualizar:** desde la carpeta del repositorio, `./scripts/deploy.sh`. El script trae `main` (`git pull --ff-only`), construye la imagen con la versión (commit corto) y las notas (títulos de los PR mezclados desde el despliegue anterior) y la levanta. Las migraciones de la base se aplican solas al arrancar.
+- **Aviso de versión nueva:** al arrancar con una versión distinta de la última anunciada, el bot envía a todos los usuarios autorizados activos un mensaje «🆕 Bot actualizado (v …)» con las notas y su teclado de botones renovado, así que nadie tiene que enviar `/start`. La versión anunciada se guarda en la base: un reinicio o una caída no repiten el aviso. Si alguien bloqueó el bot, se registra en el log y se sigue con los demás. Con `docker compose up -d --build` a mano (sin el script) la imagen queda sin versión y no se avisa nada.
 - **Reinicios:** el contenedor se reinicia solo si el proceso falla. Un token inválido, una configuración incompleta o un `CUADRE_SEED_PATH` que apunta a un archivo inexistente (por ejemplo, fuera de `data/`) detienen el bot con un mensaje claro en el log, sin reiniciarse en bucle: corrige el `.env` y vuelve a levantarlo.
 
 ## Usuarios (socios y dependientes)
