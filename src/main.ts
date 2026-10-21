@@ -1,9 +1,14 @@
 import { GrammyError, HttpError } from 'grammy';
 import { FakeSheetsGateway } from './adapters/sheets/fake-sheets-gateway.js';
 import {
+  createExpenseAppendClient,
+  GoogleExpenseLog,
+} from './adapters/sheets/google-expense-log.js';
+import {
   createSheetsClient,
   GoogleSheetsGateway,
 } from './adapters/sheets/google-sheets-gateway.js';
+import { MemoryExpenseLog } from './adapters/sheets/memory-expense-log.js';
 import { NotifyingSheetsGateway } from './adapters/sheets/notifying-sheets-gateway.js';
 import { SheetsCuadreReader } from './adapters/sheets/sheets-cuadre-reader.js';
 import { SqliteCatalogRepository } from './adapters/sqlite/catalog-repo.js';
@@ -24,6 +29,7 @@ import { openSeedFile } from './app/seed-file.js';
 import { ConfigError, loadConfig, type Config } from './config.js';
 import { EQUIVALENCES } from './core/equivalences.js';
 import type { CuadreReader } from './ports/cuadre-source.js';
+import type { ExpenseLog } from './ports/expense-log.js';
 import type { SheetsGateway } from './ports/sheets-gateway.js';
 
 /**
@@ -40,6 +46,14 @@ function createSheetsGateway({ googleServiceAccountJson, cuadreSheetId }: Config
     return new FakeSheetsGateway();
   }
   return new GoogleSheetsGateway(createSheetsClient(googleServiceAccountJson), cuadreSheetId);
+}
+
+/** Historial de /gasto: la hoja "Gastos" o, sin configurar, uno en memoria. */
+function createExpenseLog({ googleServiceAccountJson, expensesSheetId }: Config): ExpenseLog {
+  if (googleServiceAccountJson === undefined || expensesSheetId === undefined) {
+    return new MemoryExpenseLog();
+  }
+  return new GoogleExpenseLog(createExpenseAppendClient(googleServiceAccountJson), expensesSheetId);
 }
 
 /**
@@ -90,6 +104,11 @@ async function main(): Promise<void> {
       `base de datos en ${config.dbPath}, ${String(products)} productos en el catálogo` +
       (summary.catalog === null ? '.' : ` (carga inicial desde ${config.cuadreSeedPath ?? ''}).`),
   );
+  if (config.useFakeExpenses) {
+    console.warn(
+      '⚠️ /gasto guarda en memoria (faltan GOOGLE_SA_JSON o GASTOS_SPREADSHEET_ID): los gastos se pierden al reiniciar.',
+    );
+  }
   if (products === 0) {
     console.warn(
       '⚠️ Catálogo vacío: define CUADRE_SEED_PATH para cargar costos antes del primer /ipv.',
@@ -109,6 +128,7 @@ async function main(): Promise<void> {
       auth: { users, accessLog: new SqliteAccessLogRepository(db) },
       settings,
       cuadre,
+      expenses: createExpenseLog(config),
       timezone: config.timezone,
     },
     { token: config.telegramToken },
