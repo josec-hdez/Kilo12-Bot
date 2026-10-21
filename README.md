@@ -81,6 +81,8 @@ Cada cambio queda en el registro de cambios. Valen desde la siguiente carga: las
 
 Si dos productos del IPV con **precios distintos** quedan en la misma fila, la venta no cuadra con el IPV y la carga se bloquea; la vista previa lo explica. Se arregla unificando el precio en el programa de control o quitando la equivalencia.
 
+**El catálogo del bot sigue al cuadre.** Al confirmar un `/ipv`, los productos escritos en la pestaña entran al catálogo de SQLite (también los nuevos, con su nombre del IPV), y los costos que cambiaron en el cuadre se copian al historial de costos (`cuadre:AAAA-MM-DD`; un costo igual no se repite). Si se rehace un día que no es el más reciente, solo se agregan productos: no vuelven costos viejos. **🆕 Es nuevo** guarda el producto en ese momento, así que no se vuelve a preguntar. Al arrancar con Google, el bot pone el catálogo al día con la última pestaña del libro más reciente. `/deshacer` no saca productos del catálogo.
+
 ### Registrar un gasto
 
 `/gasto` (o el botón **➕ Gasto**) agrega una fila a la hoja de Google **Gastos**, con las columnas `Fecha | Cantidad | Moneda | Descripcion`. Es un **historial**: el bot no escribe en "Otros Gastos" del cuadre, que se sigue llenando a mano.
