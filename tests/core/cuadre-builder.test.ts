@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { buildCuadreDraft } from '../../src/core/cuadre-builder.js';
 import { buildCostCatalog } from '../../src/core/costs.js';
 import { EQUIVALENCES } from '../../src/core/equivalences.js';
+import { IPV_FORMAT } from '../../src/core/types.js';
 import type { IpvDay, IpvRow } from '../../src/core/types.js';
 
 let nextRow = 3;
@@ -23,6 +24,7 @@ const ipvDay = (rows: IpvRow[]): IpvDay => ({
   day: 3,
   month: 10,
   tabName: '3 oct',
+  format: IPV_FORMAT.LEGACY,
   rows,
   importeTotal: null,
   totalVendidoReal: null,

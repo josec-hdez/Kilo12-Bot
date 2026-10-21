@@ -8,6 +8,7 @@ import {
   utilidadNeta,
   type TotalsRow,
 } from '../../src/core/calc.js';
+import { IPV_FORMAT } from '../../src/core/types.js';
 
 const row = (overrides: Partial<TotalsRow>): TotalsRow => ({
   costo: null,
@@ -70,14 +71,17 @@ describe('checkIpvSales', () => {
   const sold = row({ costo: 600, precio: 1000, inicio: 10, final: 6 }); // venta 4,000
 
   it('coincide cuando la venta del cuadre es igual al IMPORTE TOTAL', () => {
-    expect(checkIpvSales([sold], 4_000)).toEqual({ status: SALES_CHECK.MATCH, ventaTotal: 4_000 });
+    expect(checkIpvSales([sold], 4_000, IPV_FORMAT.LEGACY)).toEqual({
+      status: SALES_CHECK.MATCH,
+      ventaTotal: 4_000,
+    });
   });
 
   it('acepta la diferencia si es exactamente (merma + consumo) × precio', () => {
     // El IPV no resta merma ni consumo: cuenta como venta 1 merma + 1 consumo = 2,000 CUP.
     const withLoss = row({ costo: 600, precio: 1000, inicio: 10, merma: 1, consumo: 1, final: 6 });
     expect(mermaConsumoAmount([withLoss])).toBe(2_000);
-    expect(checkIpvSales([withLoss], 4_000)).toEqual({
+    expect(checkIpvSales([withLoss], 4_000, IPV_FORMAT.LEGACY)).toEqual({
       status: SALES_CHECK.MERMA_EXPLAINED,
       ventaTotal: 2_000,
       amount: 2_000,
@@ -86,15 +90,28 @@ describe('checkIpvSales', () => {
 
   it('bloquea cualquier otra diferencia, aunque haya merma', () => {
     const withLoss = row({ precio: 1000, inicio: 10, merma: 1, final: 6 }); // venta 3,000
-    expect(checkIpvSales([withLoss], 4_500)).toEqual({
+    expect(checkIpvSales([withLoss], 4_500, IPV_FORMAT.LEGACY)).toEqual({
       status: SALES_CHECK.MISMATCH,
       ventaTotal: 3_000,
       diff: -1_500,
     });
   });
 
+  it('IPV del POS: la merma no explica ninguna diferencia, porque su SALIDA ya la resta', () => {
+    const withLoss = row({ costo: 600, precio: 1000, inicio: 10, merma: 1, consumo: 1, final: 6 });
+    expect(checkIpvSales([withLoss], 4_000, IPV_FORMAT.POS)).toEqual({
+      status: SALES_CHECK.MISMATCH,
+      ventaTotal: 2_000,
+      diff: -2_000,
+    });
+    expect(checkIpvSales([withLoss], 2_000, IPV_FORMAT.POS)).toEqual({
+      status: SALES_CHECK.MATCH,
+      ventaTotal: 2_000,
+    });
+  });
+
   it('bloquea si el IPV no trae IMPORTE TOTAL', () => {
-    expect(checkIpvSales([sold], null)).toEqual({
+    expect(checkIpvSales([sold], null, IPV_FORMAT.LEGACY)).toEqual({
       status: SALES_CHECK.NO_IPV_TOTAL,
       ventaTotal: 4_000,
     });
