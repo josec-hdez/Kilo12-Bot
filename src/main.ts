@@ -7,6 +7,8 @@ import {
 import {
   createSheetsClient,
   GoogleSheetsGateway,
+  readServiceAccount,
+  type SheetsClient,
 } from './adapters/sheets/google-sheets-gateway.js';
 import { MemoryExpenseLog } from './adapters/sheets/memory-expense-log.js';
 import { NotifyingSheetsGateway } from './adapters/sheets/notifying-sheets-gateway.js';
@@ -20,16 +22,27 @@ import {
 import { SqlitePendingActionRepository } from './adapters/sqlite/pending-actions-repo.js';
 import { SqliteSettingsRepository } from './adapters/sqlite/settings-repo.js';
 import { SqliteAccessLogRepository, SqliteUserRepository } from './adapters/sqlite/users-repo.js';
-import { createBot } from './adapters/telegram/bot.js';
+import { createBot, type BookAdmin } from './adapters/telegram/bot.js';
 import { syncCommandMenus } from './adapters/telegram/command-menu.js';
 import { telegramReleaseNotifier } from './adapters/telegram/release-notifier.js';
 import { asCuadreReader, CuadreXlsxReader } from './adapters/xlsx/cuadre-xlsx-reader.js';
 import { ANNOUNCE_STATUS, announceRelease } from './app/announce-release.js';
+import { remindMissingBook } from './app/book-reminder.js';
 import { CachedCuadreReader } from './app/cached-cuadre-reader.js';
+import {
+  ensureDefaultBook,
+  MonthTimelineReader,
+  RegistryCuadreBooks,
+  singleBook,
+  type BookOpener,
+} from './app/cuadre-books.js';
 import { initialCuadreSeed, seedAll } from './app/seed.js';
 import { openSeedFile } from './app/seed-file.js';
+import { minutesIn, todayDateIn } from './app/today.js';
 import { ConfigError, loadConfig, type Config } from './config.js';
 import { EQUIVALENCES } from './core/equivalences.js';
+import { monthName, monthOfDate } from './core/months.js';
+import type { CuadreBooks } from './ports/cuadre-books.js';
 import type { CuadreReader } from './ports/cuadre-source.js';
 import type { ExpenseLog } from './ports/expense-log.js';
 import type { SheetsGateway } from './ports/sheets-gateway.js';
@@ -44,13 +57,8 @@ const FATAL_EXIT_CODE = 0;
 const START_RETRY_MS = [5_000, 15_000, 30_000, 60_000];
 /** Pausa entre avisos de versión nueva (Telegram admite ~30 mensajes por segundo). */
 const ANNOUNCE_PAUSE_MS = 100;
-
-function createSheetsGateway({ googleServiceAccountJson, cuadreSheetId }: Config): SheetsGateway {
-  if (googleServiceAccountJson === undefined || cuadreSheetId === undefined) {
-    return new FakeSheetsGateway();
-  }
-  return new GoogleSheetsGateway(createSheetsClient(googleServiceAccountJson), cuadreSheetId);
-}
+/** Cada cuánto se revisa si toca recordar el libro del mes siguiente. */
+const REMINDER_CHECK_MS = 10 * 60 * 1000;
 
 /** Historial de /gasto: la hoja "Gastos" o, sin configurar, uno en memoria. */
 function createExpenseLog({ googleServiceAccountJson, expensesSheetId }: Config): ExpenseLog {
@@ -71,6 +79,82 @@ function chooseCuadreReader(
 ): CuadreReader {
   if (config.useFakeSheets && seedFile !== null) return asCuadreReader(seedFile);
   return new SheetsCuadreReader(sheets);
+}
+
+/** Abre un libro: escritura que vacía la memoria de 60 s de su propia lectura. */
+function openBook(
+  sheets: SheetsGateway,
+  reader: (sheets: SheetsGateway) => CuadreReader,
+  clock: () => Date,
+) {
+  const cuadre = new CachedCuadreReader(reader(sheets), clock);
+  return {
+    sheets: new NotifyingSheetsGateway(sheets, () => {
+      cuadre.invalidate();
+    }),
+    cuadre,
+  };
+}
+
+interface CuadreWiring {
+  books: CuadreBooks;
+  /** Lectura de reportes y /validar: el mes en curso y, para cruzar meses, el anterior. */
+  cuadre: CuadreReader;
+  admin: BookAdmin | undefined;
+  /** Hay libros de Google: tiene sentido recordar el del mes siguiente. */
+  real: boolean;
+}
+
+/**
+ * Un libro de cuadre por mes. Sin service account, un solo libro simulado en memoria
+ * (o el .xlsx de CUADRE_SEED_PATH para leer). Con Google, el libro de CUADRE_SHEET_ID
+ * queda registrado para CUADRE_SHEET_MONTH y los demás se registran con /cuadremes.
+ */
+function wireCuadre(
+  config: Config,
+  settings: SqliteSettingsRepository,
+  seedFile: CuadreXlsxReader | null,
+  clock: () => Date,
+): CuadreWiring {
+  const { googleServiceAccountJson: json, cuadreSheetId, cuadreSheetMonth } = config;
+  if (json === undefined || cuadreSheetId === undefined) {
+    const book = openBook(
+      new FakeSheetsGateway(),
+      (sheets) => chooseCuadreReader(config, sheets, seedFile),
+      clock,
+    );
+    return {
+      books: singleBook(book.sheets, book.cuadre, cuadreSheetMonth),
+      cuadre: book.cuadre,
+      admin: undefined,
+      real: false,
+    };
+  }
+
+  const client: SheetsClient = createSheetsClient(json);
+  if (ensureDefaultBook(settings, cuadreSheetMonth, cuadreSheetId)) {
+    console.log(`Libro de cuadre de ${monthName(cuadreSheetMonth)}: CUADRE_SHEET_ID.`);
+  }
+  const open: BookOpener = (spreadsheetId) =>
+    openBook(
+      new GoogleSheetsGateway(client, spreadsheetId),
+      (sheets) => new SheetsCuadreReader(sheets),
+      clock,
+    );
+  const books = new RegistryCuadreBooks(settings, open, cuadreSheetMonth);
+  const email = readServiceAccount(json).client_email;
+  return {
+    books,
+    cuadre: new MonthTimelineReader(books, () =>
+      monthOfDate(todayDateIn(clock(), config.timezone)),
+    ),
+    admin: {
+      inspect: async (spreadsheetId) =>
+        (await new GoogleSheetsGateway(client, spreadsheetId).listTabs()).map((tab) => tab.title),
+      serviceAccountEmail: typeof email === 'string' ? email : null,
+    },
+    real: true,
+  };
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -96,12 +180,8 @@ async function main(): Promise<void> {
     },
   );
 
-  const rawSheets = createSheetsGateway(config);
-  // Memoria de 60 s del cuadre para los reportes; cualquier escritura la vacía.
-  const cuadre = new CachedCuadreReader(chooseCuadreReader(config, rawSheets, seedFile), clock);
-  const sheets = new NotifyingSheetsGateway(rawSheets, () => {
-    cuadre.invalidate();
-  });
+  // Memoria de 60 s por libro para los reportes; cualquier escritura en ese libro la vacía.
+  const wiring = wireCuadre(config, settings, seedFile, clock);
   const products = catalog.listProducts().length;
   console.log(
     `Kilo 12 bot: ${config.useFakeSheets ? 'hoja SIMULADA en memoria (faltan GOOGLE_SA_JSON o CUADRE_SHEET_ID)' : 'Google Sheets'}, ` +
@@ -130,9 +210,9 @@ async function main(): Promise<void> {
   const bot = createBot(
     {
       pipeline: {
-        sheets,
+        books: wiring.books,
+        settings,
         catalog,
-        cuadre,
         pending: new SqlitePendingActionRepository(db, clock),
         changeLog: new SqliteChangeLogRepository(db),
         snapshots: new SqliteSnapshotRepository(db, clock),
@@ -140,15 +220,39 @@ async function main(): Promise<void> {
       },
       auth: { users, accessLog: new SqliteAccessLogRepository(db) },
       settings,
-      cuadre,
+      cuadre: wiring.cuadre,
       expenses: createExpenseLog(config),
+      ...(wiring.admin === undefined ? {} : { books: wiring.admin }),
       timezone: config.timezone,
     },
     { token: config.telegramToken },
   );
 
+  // Desde el día 25: recordar a las dueñas el libro del mes siguiente (una vez por día).
+  const checkReminder = async () => {
+    try {
+      const sent = await remindMissingBook(
+        { settings, users, notify: telegramReleaseNotifier(bot.api) },
+        {
+          today: todayDateIn(clock(), config.timezone),
+          minutesNow: minutesIn(clock(), config.timezone),
+        },
+      );
+      if (sent !== null) {
+        console.log(
+          `Recordatorio del libro de ${sent.month}: ${String(sent.ok)} enviados` +
+            (sent.failed === 0 ? '.' : `, ${String(sent.failed)} con error.`),
+        );
+      }
+    } catch (error) {
+      console.warn('No pude revisar el recordatorio del libro del mes:', error);
+    }
+  };
+  const reminder = wiring.real ? setInterval(() => void checkReminder(), REMINDER_CHECK_MS) : null;
+
   const stop = () => {
     console.log('Deteniendo el bot…');
+    if (reminder !== null) clearInterval(reminder);
     void bot.stop().finally(() => db.$client.close());
   };
   process.once('SIGINT', stop);
@@ -187,6 +291,8 @@ async function main(): Promise<void> {
   } catch (error) {
     console.warn('No pude avisar la versión nueva:', error);
   }
+
+  if (wiring.real) void checkReminder();
 
   for (let attempt = 0; ; attempt++) {
     try {
