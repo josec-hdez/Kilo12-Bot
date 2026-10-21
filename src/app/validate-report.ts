@@ -1,3 +1,4 @@
+import { resolveDayTab } from '../core/months.js';
 import {
   FINDING_CODE,
   SEVERITY,
@@ -80,7 +81,8 @@ function windowFor(days: readonly string[], request: ValidateRequest): Window | 
       to = last;
       break;
     case VALIDATE_SCOPE.DAY: {
-      const index = days.findIndex((day) => day.trim() === request.tab);
+      const tab = resolveDayTab(days, request.tab)?.trim() ?? request.tab;
+      const index = days.findIndex((day) => day.trim() === tab);
       if (index < 0) return `No existe la pestaña ${request.tab} en el cuadre.`;
       from = index;
       to = index;
