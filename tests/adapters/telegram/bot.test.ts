@@ -95,6 +95,7 @@ let accessLog: SqliteAccessLogRepository;
 let bot: ReturnType<typeof createBot>;
 let updateId: number;
 let settingsRepo: SqliteSettingsRepository;
+let catalogRepo: SqliteCatalogRepository;
 /** Pestañas de las hojas que /cuadremes puede abrir (ID → pestañas). */
 let bookTabs: Record<string, string[]>;
 
@@ -124,6 +125,7 @@ beforeEach(async () => {
   const users = new SqliteUserRepository(db);
   const settings = new SqliteSettingsRepository(db);
   settingsRepo = settings;
+  catalogRepo = catalog;
   bookTabs = {};
   seedAll(
     { users, catalog, settings },
@@ -309,10 +311,16 @@ const last = (): SentMessage => {
   if (message === undefined) throw new Error('el bot no respondió');
   return message;
 };
-const button = (prefix: string): string => {
-  const data = last().buttons.find((b) => b.startsWith(`${prefix}:`));
-  if (data === undefined) throw new Error(`no hay botón ${prefix} en: ${JSON.stringify(last())}`);
+const button = (prefix: string, message: SentMessage = last()): string => {
+  const data = message.buttons.find((b) => b.startsWith(`${prefix}:`));
+  if (data === undefined) throw new Error(`no hay botón ${prefix} en: ${JSON.stringify(message)}`);
   return data;
+};
+/** Última vista previa de /ipv: después pueden venir las preguntas de equivalencia. */
+const preview = (): SentMessage => {
+  const message = sent.findLast((m) => m.text.startsWith('📥 Hoja'));
+  if (message === undefined) throw new Error('el bot no mostró la vista previa del IPV');
+  return message;
 };
 const tabs = async () => (await sheets.listTabs()).map((t) => t.title);
 
@@ -356,12 +364,12 @@ describe('/ipv', () => {
   it('IPV del POS: reconoce el día por el título, sin preguntar, y la venta cuadra', async () => {
     ipvBuffer = posBuffer;
     await document(OWNER, undefined, 'IPV 2026-10-14.xlsx');
-    expect(last().text).toContain('Hoja «Turno 18 10-14» → pestaña 14');
-    expect(last().text).toContain('Venta: 112,845.5 CUP');
-    expect(last().text).toContain('✅ igual al IMPORTE TOTAL del IPV');
-    expect(last().text).not.toContain('¿A qué día');
+    expect(preview().text).toContain('Hoja «Turno 18 10-14» → pestaña 14');
+    expect(preview().text).toContain('Venta: 112,845.5 CUP');
+    expect(preview().text).toContain('✅ igual al IMPORTE TOTAL del IPV');
+    expect(sent.some((m) => m.text.includes('¿A qué día'))).toBe(false);
 
-    await click(OWNER, button('ok'));
+    await click(OWNER, button('ok', preview()));
     expect(last().text).toContain('✅ Pestaña 14 creada');
     expect(await tabs()).toContain('14');
   });
@@ -406,7 +414,7 @@ describe('/ipv', () => {
   it('elige por nombre normalizado: "2 OCT" encuentra "2 oct "', async () => {
     await document(OWNER);
     await text(OWNER, '2 OCT');
-    expect(last().text).toContain('Hoja «2 oct» → pestaña 02');
+    expect(preview().text).toContain('Hoja «2 oct» → pestaña 02');
   });
 
   it('error de tipeo: propone la hoja parecida y solo la usa con Sí', async () => {
@@ -427,7 +435,7 @@ describe('/ipv', () => {
     await click(OWNER, 'ipvs:n');
     expect(last().text).toContain('¿Cuál analizo?');
     await text(OWNER, '4');
-    expect(last().text).toContain('Hoja «1 oct» → pestaña 01');
+    expect(preview().text).toContain('Hoja «1 oct» → pestaña 01');
   });
 
   it('nada parecido: lo dice y sigue esperando la hoja', async () => {
@@ -449,12 +457,12 @@ describe('/ipv', () => {
     await text(OWNER, 'mañana');
     expect(last().text).toBe(BOT_TEXT.SHEET_DAY_INVALID);
     await text(OWNER, '30 sep');
-    expect(last().text).toContain('Hoja «IPV Alf. 30 sep» → pestaña 30');
+    expect(preview().text).toContain('Hoja «IPV Alf. 30 sep» → pestaña 30');
   });
 
   it('el pie con el nombre de la hoja se salta la pregunta', async () => {
     await document(OWNER, '2 oct');
-    expect(last().text).toContain('Hoja «2 oct» → pestaña 02');
+    expect(preview().text).toContain('Hoja «2 oct» → pestaña 02');
   });
 
   it('pie desconocido: no da error, pregunta la hoja', async () => {
@@ -1102,5 +1110,111 @@ describe('🔒 /cierremes (revisar y cerrar el mes)', () => {
   it('un mes inválido explica el uso', async () => {
     await text(OWNER, '/cierremes octubre');
     expect(last().text).toContain('Uso: /cierremes');
+  });
+});
+
+describe('equivalencias', () => {
+  it('/ipv: la dueña elige un candidato y la vista previa se rehace con la equivalencia', async () => {
+    await document(OWNER, '2 oct');
+    const first = preview();
+    expect(first.text).toContain('cerveza beck (¿cerveza becks?)');
+    expect(first.text).toContain('Abajo te pregunto, uno por uno');
+    expect(last().text).toContain('🔗 (1 de 2) «cerveza beck» no está en el cuadre');
+    expect(last().buttons).toEqual(['ia:0', 'ia:new', 'ia:end']);
+
+    await click(OWNER, 'ia:0');
+    expect(sent.at(-2)?.text).toBe('✅ «cerveza beck» ahora es equivalencia de cerveza becks.');
+    expect(last().text).toContain('🔗 (2 de 2) «cigarro popular verde caja»');
+
+    await click(OWNER, 'ia:new');
+    const again = preview();
+    expect(again).not.toBe(first);
+    expect(again.text).not.toContain('cerveza beck (');
+    expect(again.text).toContain('cigarro popular verde caja');
+    expect(again.text).not.toContain('Abajo te pregunto');
+    expect(sent.some((m) => m.text.startsWith('🔄 Rehago la vista previa'))).toBe(true);
+    expect(changeLog.list()).toMatchObject([
+      { telegramId: OWNER, action: 'add_equivalence', target: 'cerveza beck' },
+      { telegramId: OWNER, action: 'add_product', target: 'cigarro popular verde caja' },
+    ]);
+    // 🆕 Es nuevo lo guarda en el catálogo: ya no queda "sin equivalencia".
+    expect(catalogRepo.findProduct('cigarro popular verde caja')).toBeDefined();
+    expect(again.text).not.toContain('Sin equivalencia');
+
+    // La vista previa vieja ya no se puede confirmar; la nueva sí.
+    await click(OWNER, button('ok', first));
+    expect(last().text).toBe('Esa acción ya está cerrada.');
+    await click(OWNER, button('ok', again));
+    expect(last().text).toContain('✅ Pestaña 02 creada');
+  });
+
+  it('/ipv: ⏭ Dejar de preguntar sin elegir nada deja la vista previa como estaba', async () => {
+    await document(OWNER, '2 oct');
+    const first = preview();
+    await click(OWNER, 'ia:end');
+    expect(last().text).toBe(
+      'Listo: no se guardó ninguna equivalencia. La vista previa de arriba sigue igual.',
+    );
+    expect(preview()).toBe(first);
+    expect(changeLog.list()).toEqual([]);
+  });
+
+  it('/ipv: si la carga ya se confirmó, la equivalencia queda para la próxima', async () => {
+    await document(OWNER, '2 oct');
+    await click(OWNER, button('ok', preview()));
+    await click(OWNER, 'ia:0');
+    await click(OWNER, 'ia:end');
+    expect(last().text).toContain('Las equivalencias quedaron guardadas');
+    expect(last().text).toContain('Valen desde la próxima carga del IPV');
+  });
+
+  it('/ipv: el dependiente ve la sugerencia en la vista previa, pero no recibe preguntas', async () => {
+    await document(CLERK, '2 oct');
+    expect(last()).toBe(preview());
+    expect(preview().text).toContain('cerveza beck (¿cerveza becks?)');
+    expect(sent.some((m) => m.text.startsWith('🔗'))).toBe(false);
+    await click(CLERK, 'ia:0');
+    expect(answers.at(-1)?.text).toContain('Tu rol no permite');
+  });
+
+  it('/equivalencia: lista, agrega con ✅ y quita con ✅', async () => {
+    await text(OWNER, '/equivalencia');
+    expect(last().text).toContain('📚 Equivalencias');
+    expect(last().text).toContain('pollo ← pollo lb');
+
+    await text(OWNER, '/equivalencia cerveza becks = cerveza beck');
+    expect(last().text).toContain('🔗 Nueva equivalencia');
+    expect(last().buttons).toEqual(['eq:ok', 'eq:no']);
+    await click(OWNER, 'eq:ok');
+    expect(last().text).toBe('✅ «cerveza beck» ahora es equivalencia de cerveza becks.');
+
+    await text(OWNER, '/equivalencia quitar cerveza beck');
+    expect(last().text).toContain('✂️ Quitar equivalencia');
+    await click(OWNER, 'eq:ok');
+    expect(last().text).toBe('✅ «cerveza beck» ya no es equivalencia de cerveza becks.');
+    expect(changeLog.list().map((entry) => entry.action)).toEqual([
+      'add_equivalence',
+      'remove_equivalence',
+    ]);
+  });
+
+  it('/equivalencia: ❌ no guarda, un nombre fuera del cuadre se rechaza y el uso se explica', async () => {
+    await text(OWNER, '/equivalencia cerveza becks = cerveza beck');
+    await click(OWNER, 'eq:no');
+    expect(last().text).toBe(BOT_TEXT.FLOW_CANCELLED);
+
+    await text(OWNER, '/equivalencia cerbeza bek = cerveza beck');
+    expect(last().text).toContain('no está en el cuadre');
+
+    await text(OWNER, '/equivalencia cerveza beck');
+    expect(last().text).toContain('Uso: /equivalencia');
+    expect(changeLog.list()).toEqual([]);
+  });
+
+  it('/equivalencia es solo para las dueñas', async () => {
+    await text(PARTNER, '/equivalencia');
+    expect(last().text).toContain('Tu rol no permite');
+    await text(CLERK, '/equivalencia pollo = pollo lb');
+    expect(last().text).toContain('Tu rol no permite');
   });
 });

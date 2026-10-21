@@ -20,6 +20,7 @@ import {
   reviewMonthClose,
 } from '../../src/app/close-month.js';
 import { isMonthClosed, markMonthClosed } from '../../src/app/closed-months.js';
+import { sheetCostRows, syncCatalog } from '../../src/app/catalog-sync.js';
 import { cancelPending, confirmPending } from '../../src/app/confirm.js';
 import { registerBook, RegistryCuadreBooks, singleBook } from '../../src/app/cuadre-books.js';
 import { dayTab, prepareIpvLoad } from '../../src/app/load-ipv.js';
@@ -435,6 +436,58 @@ describe('/tc y /deshacer', () => {
     expect(await prepareSetTc(deps, OWNER, { tab: '09', tc: 780 })).toMatchObject({
       status: PREPARE_STATUS.REJECTED,
     });
+  });
+});
+
+describe('el catálogo sigue al cuadre', () => {
+  async function confirmDay3(): Promise<LoadIpvPayload> {
+    const { pendingId } = ready(
+      await prepareIpvLoad(deps, OWNER, { ipv: ipv3, tc: 780, month: OCT }),
+    );
+    const payload = deps.pending.get(pendingId)?.payload as LoadIpvPayload;
+    await confirmPending(deps, OWNER, { pendingId });
+    return payload;
+  }
+
+  const rowsOf = (payload: LoadIpvPayload) =>
+    payload.sheetValues.map(([product, cost]) => ({
+      product: String(product),
+      cost: typeof cost === 'number' ? cost : null,
+    }));
+
+  it('al confirmar guarda los productos escritos y los costos que cambiaron', async () => {
+    const payload = await confirmDay3();
+    const rows = rowsOf(payload);
+
+    for (const { product } of rows) expect(deps.catalog.findProduct(product)).toBeDefined();
+    for (const { product, cost } of rows) {
+      if (cost !== null) expect(deps.catalog.findProduct(product)?.cost).toBe(cost);
+    }
+  });
+
+  it('un costo igual no repite el historial', async () => {
+    const payload = await confirmDay3();
+    const sample = rowsOf(payload).find((row) => row.cost !== null);
+    if (sample === undefined) throw new Error('sin costos en la fixture');
+    const history = deps.catalog.costHistory(sample.product).length;
+    const again = syncCatalog(deps.catalog, sheetCostRows(payload.sheetValues), 'cuadre:test');
+    expect(again).toEqual({ added: [], costsUpdated: 0 });
+    expect(deps.catalog.costHistory(sample.product)).toHaveLength(history);
+  });
+
+  it('/deshacer borra la pestaña pero deja los productos en el catálogo', async () => {
+    const payload = await confirmDay3();
+    await confirmPending(deps, OWNER, { pendingId: ready(prepareUndo(deps, OWNER)).pendingId });
+    for (const { product } of rowsOf(payload)) {
+      expect(deps.catalog.findProduct(product)).toBeDefined();
+    }
+  });
+
+  it('rehacer un día viejo agrega productos pero no devuelve costos viejos', async () => {
+    await sheets.addTab('05', { hidden: false });
+    const costs = new Map(deps.catalog.costSources().map((row) => [row.product, row.costo]));
+    await confirmDay3();
+    for (const [product, cost] of costs) expect(deps.catalog.findProduct(product)?.cost).toBe(cost);
   });
 });
 

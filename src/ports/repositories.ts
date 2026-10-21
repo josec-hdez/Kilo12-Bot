@@ -129,6 +129,10 @@ export interface CatalogRepository {
   ensureProduct(name: string): Product;
   /** Asocia un alias del IPV a un producto. Falla si el alias ya pertenece a otro. */
   addAlias(product: string, alias: string): void;
+  /** Producto del cuadre dueño del alias, o null si el alias no está en ninguno. */
+  aliasOwner(alias: string): string | null;
+  /** Quita el alias. Devuelve el producto que lo tenía, o null si no estaba. */
+  removeAlias(alias: string): string | null;
   /** Cambia el costo vigente y lo registra en el historial. */
   setCost(change: CostChange): void;
   costHistory(product: string): CostHistoryEntry[];

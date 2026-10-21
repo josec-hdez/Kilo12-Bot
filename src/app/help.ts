@@ -50,6 +50,12 @@ export const MVP_COMMANDS: readonly CommandHelp[] = [
       'Revisar y cerrar un mes: días que faltan, errores, continuidad, productos sin costo e inventario final. Sin mes: del 1 al 10, el anterior; después, el actual.',
   },
   {
+    command: 'equivalencia',
+    usage: '/equivalencia [cuadre = IPV | quitar IPV]',
+    description:
+      'Nombres del IPV que son el mismo producto del cuadre: sin datos, la lista; «pollo = pollo lb» agrega; «quitar pollo lb» quita. También se eligen en la vista previa de /ipv.',
+  },
+  {
     command: 'hoy',
     usage: '/hoy',
     description: 'Resumen de hoy (o del último día cargado).',

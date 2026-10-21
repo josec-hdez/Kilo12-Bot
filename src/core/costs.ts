@@ -63,3 +63,46 @@ export function buildLastKnownCosts(
 ): CostCatalog {
   return buildCostCatalog([...fallback, ...days.flat()]);
 }
+
+export interface CostUpdate {
+  product: string;
+  cost: number;
+  previous: number | null;
+}
+
+export interface CatalogSyncPlan {
+  /** Productos del cuadre que el catálogo todavía no tiene. */
+  newProducts: string[];
+  /** Costos del cuadre (> 0) distintos del que guarda el catálogo. */
+  costUpdates: CostUpdate[];
+}
+
+/**
+ * Qué falta en el catálogo de SQLite para reflejar el cuadre: productos que no tiene y
+ * costos que cambiaron. Un costo igual, vacío o 0 no genera cambio (no se repite el
+ * historial). Los nombres que ya son equivalencia de otro producto se ignoran: son
+ * filas viejas escritas con el nombre del IPV antes de existir la equivalencia.
+ */
+export function planCatalogSync(
+  catalog: readonly CostSource[],
+  cuadre: readonly CostSource[],
+  aliases: readonly string[] = [],
+): CatalogSyncPlan {
+  const known = new Map(catalog.map((entry) => [normalizeName(entry.product), entry]));
+  const aliasKeys = new Set(aliases.map(normalizeName));
+  const newProducts: string[] = [];
+  const costUpdates: CostUpdate[] = [];
+  const latest = buildCostCatalog(
+    cuadre.filter((row) => !aliasKeys.has(normalizeName(row.product))),
+  );
+
+  for (const [key, { product, costo }] of latest) {
+    const current = known.get(key);
+    if (current === undefined) newProducts.push(product);
+    const previous = knownCost(current?.costo ?? null);
+    if (costo !== null && costo !== previous) {
+      costUpdates.push({ product: current?.product ?? product, cost: costo, previous });
+    }
+  }
+  return { newProducts, costUpdates };
+}

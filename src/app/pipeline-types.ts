@@ -44,17 +44,26 @@ export const PREPARE_STATUS = {
   REJECTED: 'rejected',
 } as const;
 
+/** Producto del IPV sin equivalencia y los del cuadre que podrían ser el mismo. */
+export interface AliasQuestion {
+  ipvProduct: string;
+  candidates: string[];
+}
+
 export interface PrepareReady {
   status: typeof PREPARE_STATUS.READY;
   pendingId: string;
   preview: string;
   /** Hay bloqueos: solo se ofrece "⚠️ Confirmar igual" (dueña + motivo). */
   requiresForce: boolean;
+  /** Solo /ipv y solo para quien gestiona equivalencias: se preguntan tras la vista previa. */
+  aliasQuestions?: AliasQuestion[];
 }
 
 export interface PrepareBlocked {
   status: typeof PREPARE_STATUS.BLOCKED;
   preview: string;
+  aliasQuestions?: AliasQuestion[];
 }
 
 export interface PrepareRejected {

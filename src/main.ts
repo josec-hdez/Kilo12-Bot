@@ -36,6 +36,7 @@ import {
   singleBook,
   type BookOpener,
 } from './app/cuadre-books.js';
+import { syncCatalogAtStartup } from './app/catalog-sync.js';
 import { initialCuadreSeed, seedAll } from './app/seed.js';
 import { openSeedFile } from './app/seed-file.js';
 import { minutesIn, todayDateIn } from './app/today.js';
@@ -182,6 +183,21 @@ async function main(): Promise<void> {
 
   // Memoria de 60 s por libro para los reportes; cualquier escritura en ese libro la vacía.
   const wiring = wireCuadre(config, settings, seedFile, clock);
+  // El catálogo sigue al cuadre real: productos nuevos y costos cambiados a mano desde
+  // la última vez. En modo simulado no hay cuadre real (la carga inicial ya lo cubre).
+  if (wiring.real) {
+    try {
+      const synced = await syncCatalogAtStartup(catalog, wiring.books, settings);
+      if (synced !== null && (synced.added.length > 0 || synced.costsUpdated > 0)) {
+        console.log(
+          `Catálogo al día con la pestaña ${synced.tab} de ${monthName(synced.month)}: ` +
+            `${String(synced.added.length)} productos nuevos, ${String(synced.costsUpdated)} costos actualizados.`,
+        );
+      }
+    } catch (error) {
+      console.warn('No pude poner el catálogo al día con el cuadre:', error);
+    }
+  }
   const products = catalog.listProducts().length;
   console.log(
     `Kilo 12 bot: ${config.useFakeSheets ? 'hoja SIMULADA en memoria (faltan GOOGLE_SA_JSON o CUADRE_SHEET_ID)' : 'Google Sheets'}, ` +
