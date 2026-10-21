@@ -1,7 +1,14 @@
 import ExcelJS from 'exceljs';
 import { cellNumber, cellText } from './cells.js';
-import { findIpvTab, formatDayRef, normalizeName, parseIpvTabDate } from '../../core/tabs.js';
-import type { DayRef, IpvDay, IpvRow, IpvTabRef } from '../../core/types.js';
+import {
+  formatDayRef,
+  normalizeName,
+  parseIpvTabDate,
+  parsePosTabDate,
+  parsePosTitleDate,
+} from '../../core/tabs.js';
+import { IPV_FORMAT } from '../../core/types.js';
+import type { DayRef, IpvDay, IpvFormat, IpvRow, IpvTabRef } from '../../core/types.js';
 import type { IpvSource } from '../../ports/ipv-source.js';
 
 const HEADER_FIELDS = {
@@ -54,6 +61,27 @@ function findColumns(sheet: ExcelJS.Worksheet): { headerRow: number; columns: Co
   throw new IpvFormatError(`La pestaña "${sheet.name}" no tiene el encabezado MERCANCIA`);
 }
 
+interface SheetInfo {
+  format: IpvFormat;
+  /** Día que dice la hoja; null si no lo dice. */
+  date: DayRef | null;
+}
+
+/**
+ * Formato y día de una hoja. El POS pone la fecha completa en A1 y en el nombre
+ * (`Turno 18 10-14`); se prefiere A1. El IPV a mano solo la tiene en el nombre (`3 oct`).
+ */
+function sheetInfo(sheet: ExcelJS.Worksheet): SheetInfo {
+  const posDate = parsePosTitleDate(cellText(sheet.getCell('A1'))) ?? parsePosTabDate(sheet.name);
+  if (posDate !== null) return { format: IPV_FORMAT.POS, date: posDate };
+  return { format: IPV_FORMAT.LEGACY, date: parseIpvTabDate(sheet.name) };
+}
+
+/** Total de una fila de pie: en la columna IMPORTE (POS) o junto a la etiqueta (a mano). */
+function footerTotal(row: ExcelJS.Row, columns: ColumnMap): number | null {
+  return cellNumber(row.getCell(columns.importe)) ?? cellNumber(row.getCell(columns.product + 1));
+}
+
 function readSheet(sheet: ExcelJS.Worksheet, ref: IpvTabRef): IpvDay {
   const { headerRow, columns } = findColumns(sheet);
   const rows: IpvRow[] = [];
@@ -67,14 +95,13 @@ function readSheet(sheet: ExcelJS.Worksheet, ref: IpvTabRef): IpvDay {
     const normalized = normalizeName(label);
     if (label === '') continue;
 
-    // El total se escribe en la columna siguiente a la etiqueta.
     if (normalized === IMPORTE_TOTAL) {
-      importeTotal = cellNumber(row.getCell(columns.product + 1));
+      importeTotal = footerTotal(row, columns);
       reachedTotal = true;
       continue;
     }
     if (normalized === TOTAL_VENDIDO_REAL) {
-      totalVendidoReal = cellNumber(row.getCell(columns.product + 1));
+      totalVendidoReal = footerTotal(row, columns);
       continue;
     }
     if (reachedTotal) continue;
@@ -93,10 +120,13 @@ function readSheet(sheet: ExcelJS.Worksheet, ref: IpvTabRef): IpvDay {
     });
   }
 
-  return { ...ref, rows, importeTotal, totalVendidoReal };
+  return { ...ref, format: sheetInfo(sheet).format, rows, importeTotal, totalVendidoReal };
 }
 
-/** IPV en un .xlsx con una pestaña por día (`1 oct`, `2 oct `…). */
+/**
+ * IPV en un .xlsx: el del programa de control (una hoja `Turno 18 10-14`) o el
+ * hecho a mano, con una pestaña por día (`1 oct`, `2 oct `…).
+ */
 export class ExcelIpvSource implements IpvSource {
   private constructor(private readonly workbook: ExcelJS.Workbook) {}
 
@@ -118,21 +148,23 @@ export class ExcelIpvSource implements IpvSource {
 
   listDays(): IpvTabRef[] {
     return this.workbook.worksheets.flatMap((sheet) => {
-      const parsed = parseIpvTabDate(sheet.name);
-      return parsed ? [{ ...parsed, tabName: sheet.name }] : [];
+      const { date } = sheetInfo(sheet);
+      return date ? [{ ...date, tabName: sheet.name }] : [];
     });
   }
 
+  sheetDate(tabName: string): DayRef | null {
+    const sheet = this.workbook.getWorksheet(tabName);
+    return sheet?.name === tabName ? sheetInfo(sheet).date : null;
+  }
+
   readDay(ref: DayRef): IpvDay {
-    const tabName = findIpvTab(
-      this.workbook.worksheets.map((sheet) => sheet.name),
-      ref,
-    );
-    const sheet = tabName === null ? undefined : this.workbook.getWorksheet(tabName);
-    if (tabName === null || sheet === undefined) {
+    const found = this.listDays().find((tab) => tab.day === ref.day && tab.month === ref.month);
+    const sheet = found === undefined ? undefined : this.workbook.getWorksheet(found.tabName);
+    if (found === undefined || sheet === undefined) {
       throw new IpvFormatError(`El IPV no tiene la pestaña del ${formatDayRef(ref)}`);
     }
-    return readSheet(sheet, { day: ref.day, month: ref.month, tabName });
+    return readSheet(sheet, { day: ref.day, month: ref.month, tabName: found.tabName });
   }
 
   readSheet(tabName: string, ref: DayRef): IpvDay {

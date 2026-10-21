@@ -26,7 +26,20 @@ export interface IpvRow {
   final: number | null;
 }
 
+/**
+ * Formato del archivo. `legacy`: IPV hecho a mano, con una pestaña por día (`3 oct`)
+ * y una SALIDA que no resta merma ni consumo. `pos`: lo descarga el programa de
+ * control (`Turno 18 10-14`) y su SALIDA ya los resta.
+ */
+export const IPV_FORMAT = {
+  LEGACY: 'legacy',
+  POS: 'pos',
+} as const;
+
+export type IpvFormat = (typeof IPV_FORMAT)[keyof typeof IPV_FORMAT];
+
 export interface IpvDay extends IpvTabRef {
+  format: IpvFormat;
   rows: IpvRow[];
   /** Valor de la celda `IMPORTE TOTAL`: la venta del día según el IPV. */
   importeTotal: number | null;

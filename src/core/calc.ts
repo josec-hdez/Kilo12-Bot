@@ -1,3 +1,5 @@
+import { IPV_FORMAT, type IpvFormat } from './types.js';
+
 /** Cantidades y precios de una fila, como se escriben en el cuadre. Vacío = `null`. */
 export interface TotalsRow {
   costo: number | null;
@@ -110,16 +112,22 @@ export interface SalesNoIpvTotal extends SalesCheckBase {
 export type SalesCheck = SalesMatch | SalesMermaExplained | SalesMismatch | SalesNoIpvTotal;
 
 /**
- * Compara la venta del cuadre con el IMPORTE TOTAL del IPV. La única diferencia
- * aceptada es exactamente la merma y el consumo valorados a precio (CLAUDE.md, T2).
+ * Compara la venta del cuadre con el IMPORTE TOTAL del IPV. En el IPV hecho a mano
+ * la única diferencia aceptada es exactamente la merma y el consumo valorados a
+ * precio (CLAUDE.md, T2). El del POS ya los resta: cualquier diferencia bloquea.
  */
-export function checkIpvSales(rows: readonly TotalsRow[], importeTotal: number | null): SalesCheck {
+export function checkIpvSales(
+  rows: readonly TotalsRow[],
+  importeTotal: number | null,
+  format: IpvFormat,
+): SalesCheck {
   const { ventaTotal } = computeTotals(rows);
   if (importeTotal === null) return { status: SALES_CHECK.NO_IPV_TOTAL, ventaTotal };
   if (salesMatchIpv(ventaTotal, importeTotal)) return { status: SALES_CHECK.MATCH, ventaTotal };
 
   const amount = mermaConsumoAmount(rows);
-  if (amount > 0 && Math.abs(importeTotal - ventaTotal - amount) <= SALES_TOLERANCE) {
+  const mermaTolerated = format === IPV_FORMAT.LEGACY && amount > 0;
+  if (mermaTolerated && Math.abs(importeTotal - ventaTotal - amount) <= SALES_TOLERANCE) {
     return { status: SALES_CHECK.MERMA_EXPLAINED, ventaTotal, amount };
   }
   return { status: SALES_CHECK.MISMATCH, ventaTotal, diff: money(ventaTotal - importeTotal) };

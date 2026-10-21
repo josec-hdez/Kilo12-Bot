@@ -41,14 +41,21 @@ Una venta sin costo cuenta como ganancia completa: los reportes la marcan como u
 
 **Sin IA.** El bot no interpreta mensajes libres: cualquier texto que no sea un comando ni un botón recibe la ayuda y el teclado del rol.
 
+### Formatos del IPV
+
+- **Programa de control (POS), el formato habitual:** una sola hoja llamada como `Turno 18 10-14` (mes-día), con el título en A1 (`IPV · turno 18 · 2026-10-14 09:03:50 → …`), el encabezado en la fila 2 y, al pie, `IMPORTE TOTAL`, `Total vendido real` y `Diferencia` en la columna IMPORTE. El bot toma el día de la fecha de inicio del turno en A1 (o, si falta, del nombre de la hoja) y va directo a la vista previa. Su SALIDA ya resta la merma y el consumo, así que la venta del cuadre debe ser **exactamente** igual al `IMPORTE TOTAL`.
+- **IPV hecho a mano (anterior):** una pestaña por día (`3 oct`) con el total junto a la etiqueta `IMPORTE TOTAL`. Se sigue aceptando.
+
+Se acepta un solo turno por día: si la pestaña del día ya existe en el cuadre, la carga se rechaza.
+
 ### Elegir la hoja del IPV
 
-El IPV suele traer muchas hojas. El bot **nunca adivina cuál cargar**:
+El IPV hecho a mano suele traer muchas hojas. El bot **nunca adivina cuál cargar**:
 
 1. Al recibir el `.xlsx`, responde con la lista numerada de **todas** las hojas, también las que no son días (`Hoja1`, `IPV Alf. 30 sep`). Los nombres con espacios en los bordes aparecen entre comillas con el aviso "(con espacio al final)".
 2. Se responde con el **número** de la lista o con el **nombre**. Mayúsculas, acentos y espacios de más no importan (`2 oct` encuentra `"2 oct "`).
 3. Si el nombre no coincide con ninguna hoja, el bot propone la más parecida (_"No hay una hoja «3 ocr». ¿Quisiste decir «3 oct»?"_) y solo la usa si se pulsa **Sí**. **No** vuelve a preguntar.
-4. Si el nombre de la hoja no dice el día (`Hoja1`), pregunta a qué día del cuadre corresponde (`05` o `5 oct`).
+4. Si la hoja no dice el día, ni en su nombre ni en el título del POS (`Hoja1`), pregunta a qué día del cuadre corresponde (`05` o `5 oct`).
 5. La vista previa muestra siempre la hoja elegida: _"📥 Hoja «3 oct» → pestaña 03 del cuadre"_.
 
 Atajos:
@@ -213,7 +220,7 @@ Después de agregar a alguien, esa persona debe enviar **`/start`** al bot: reci
 ## Flujo diario
 
 1. **Cargar el IPV:** reenviar el `.xlsx` al bot y, si tiene varias hojas, decir cuál analizar. Revisar la vista previa: hoja elegida, venta, utilidad bruta, productos sin costo y alertas.
-   - La venta del cuadre debe ser igual al `IMPORTE TOTAL` del IPV. La única diferencia aceptada es exactamente la merma y el consumo valorados a precio (aviso 🟡).
+   - La venta del cuadre debe ser igual al `IMPORTE TOTAL` del IPV. Solo en el IPV hecho a mano se acepta una diferencia: exactamente la merma y el consumo valorados a precio (aviso 🟡). En el del POS cualquier diferencia bloquea.
    - Si hay bloqueos 🔴 (por ejemplo, `CANT. FINAL` vacía con existencia), no aparece ✅. Una dueña puede usar **⚠️ Confirmar igual** y escribir el motivo, que queda registrado.
 2. **Fijar la TC:** `/tc 780`.
 3. **Revisar:** `/validar` o `/validar semana`.

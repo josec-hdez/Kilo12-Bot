@@ -2,8 +2,10 @@ import { fileURLToPath } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { ExcelIpvSource } from '../../src/adapters/xlsx/excel-ipv-source.js';
 import { rowsWithEmptyFinal } from '../../src/core/ipv.js';
+import { IPV_FORMAT } from '../../src/core/types.js';
 
 const IPV_FIXTURE = fileURLToPath(new URL('../fixtures/IPV KILO 12.xlsx', import.meta.url));
+const POS_FIXTURE = fileURLToPath(new URL('../fixtures/IPV POS 2026-10-14.xlsx', import.meta.url));
 
 describe('ExcelIpvSource con el IPV real', () => {
   let source: ExcelIpvSource;
@@ -97,5 +99,59 @@ describe('ExcelIpvSource con el IPV real', () => {
   it('readSheet exige el nombre exacto', () => {
     expect(() => source.readSheet('2 oct', { day: 2, month: 10 })).toThrow(/«2 oct»/);
     expect(() => source.readSheet('3 OCT', { day: 3, month: 10 })).toThrow(/«3 OCT»/);
+  });
+});
+
+describe('ExcelIpvSource con el IPV del programa de control (POS)', () => {
+  const TAB = 'Turno 18 10-14';
+  let source: ExcelIpvSource;
+
+  beforeAll(async () => {
+    source = await ExcelIpvSource.fromFile(POS_FIXTURE);
+  });
+
+  it('reconoce el día por el título de A1', () => {
+    expect(source.listSheets()).toEqual([TAB]);
+    expect(source.listDays()).toEqual([{ day: 14, month: 10, tabName: TAB }]);
+    expect(source.sheetDate(TAB)).toEqual({ day: 14, month: 10 });
+    expect(source.sheetDate('Hoja1')).toBeNull();
+  });
+
+  it('lee el IMPORTE TOTAL y el Total vendido real de la columna IMPORTE', () => {
+    const ipv = source.readDay({ day: 14, month: 10 });
+
+    expect(ipv).toMatchObject({
+      tabName: TAB,
+      format: IPV_FORMAT.POS,
+      importeTotal: 112_845.5,
+      totalVendidoReal: 112_845.5,
+    });
+  });
+
+  it('ignora el título y el pie: solo quedan las 117 filas de productos', () => {
+    const ipv = source.readSheet(TAB, { day: 14, month: 10 });
+    const products = ipv.rows.map((row) => row.product);
+
+    expect(ipv.rows).toHaveLength(117);
+    expect(ipv.rows[0]).toMatchObject({ rowNumber: 3, product: 'aceite' });
+    expect(products.at(-1)).toBe('zumo limon');
+    expect(products).not.toContain('Total vendido real');
+    expect(products).not.toContain('Diferencia');
+    const sum = ipv.rows.reduce((acc, row) => acc + (row.importe ?? 0), 0);
+    expect(sum).toBe(ipv.importeTotal);
+  });
+
+  it('conserva las cantidades con decimales', () => {
+    const pollo = source.readDay({ day: 14, month: 10 }).rows.find((r) => r.product === 'pollo');
+
+    expect(pollo).toMatchObject({ inicial: 48.56, salida: 10.86, final: 37.7, importe: 11_403 });
+  });
+
+  it('el IPV a mano sigue marcado como legacy', async () => {
+    const legacy = await ExcelIpvSource.fromFile(IPV_FIXTURE);
+
+    expect(legacy.readDay({ day: 3, month: 10 }).format).toBe(IPV_FORMAT.LEGACY);
+    expect(legacy.sheetDate('3 oct')).toEqual({ day: 3, month: 10 });
+    expect(legacy.sheetDate('IPV Alf. 30 sep')).toBeNull();
   });
 });
