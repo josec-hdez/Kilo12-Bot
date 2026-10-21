@@ -189,12 +189,16 @@ export interface RangeSnapshot {
 export interface CreateTabSnapshot {
   kind: typeof SNAPSHOT_KIND.CREATE_TAB;
   tab: string;
+  /** Mes del libro (`2026-11`). Sin mes: escrituras anteriores a los libros por mes. */
+  month?: string;
 }
 
 export interface CellsSnapshot {
   kind: typeof SNAPSHOT_KIND.CELLS;
   tab: string;
   ranges: RangeSnapshot[];
+  /** Mes del libro (`2026-11`). Sin mes: escrituras anteriores a los libros por mes. */
+  month?: string;
 }
 
 export type SnapshotPayload = CreateTabSnapshot | CellsSnapshot;
