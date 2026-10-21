@@ -58,7 +58,7 @@ export async function prepareIpvLoad(
 
   const draft = buildCuadreDraft(ipv, buildCostCatalog(costSources), deps.catalog.equivalences());
   const totals = computeTotals(draft.rows);
-  const sales = checkIpvSales(draft.rows, ipv.importeTotal);
+  const sales = checkIpvSales(draft.rows, ipv.importeTotal, ipv.format);
   const ipvFindings = validateIpv(ipv);
   const blockers = ipvLoadBlockers(ipvFindings, sales);
   const alerts = sortFindings([...ipvFindings, ...salesFindings(sales, formatDayRef(ipv))]);
