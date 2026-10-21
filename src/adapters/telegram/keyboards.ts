@@ -1,6 +1,7 @@
 import { InlineKeyboard, Keyboard } from 'grammy';
 import { keyboardRowsFor } from '../../app/keyboard-menu.js';
 import type { Role } from '../../core/auth.js';
+import { EXPENSE_CURRENCIES } from '../../core/expense.js';
 
 /** Prefijos del callback_data (máximo 64 bytes en Telegram). */
 export const CALLBACK = {
@@ -19,6 +20,17 @@ export const CALLBACK = {
   FLOW_TOP: 'gt',
   /** Elegir producto en /fila o /producto: `prod:<id>:<índice>`. */
   PRODUCT: 'prod',
+  /** ➕ Gasto: `gx:today`, `gx:other`, `gx:cur:<moneda>`, `gx:ok`, `gx:no`. */
+  EXPENSE: 'gx',
+} as const;
+
+/** Acciones de los botones de ➕ Gasto (lo que va después de `gx:`). */
+export const EXPENSE_ACTION = {
+  TODAY: 'today',
+  OTHER_DAY: 'other',
+  CURRENCY: 'cur',
+  CONFIRM: 'ok',
+  CANCEL: 'no',
 } as const;
 
 export function confirmKeyboard(pendingId: string, requiresForce: boolean): InlineKeyboard {
@@ -77,4 +89,25 @@ export function topMetricButtons(): InlineKeyboard {
   for (const metric of TOP_METRICS)
     keyboard.text(metric.label, `${CALLBACK.FLOW_TOP}:${metric.value}`);
   return keyboard;
+}
+
+/** [Hoy] / [Otro día] para la fecha del gasto. */
+export function expenseDateKeyboard(): InlineKeyboard {
+  return new InlineKeyboard()
+    .text('Hoy', `${CALLBACK.EXPENSE}:${EXPENSE_ACTION.TODAY}`)
+    .text('Otro día', `${CALLBACK.EXPENSE}:${EXPENSE_ACTION.OTHER_DAY}`);
+}
+
+export function expenseCurrencyKeyboard(): InlineKeyboard {
+  const keyboard = new InlineKeyboard();
+  for (const currency of EXPENSE_CURRENCIES)
+    keyboard.text(currency, `${CALLBACK.EXPENSE}:${EXPENSE_ACTION.CURRENCY}:${currency}`);
+  return keyboard;
+}
+
+/** Vista previa del gasto: no pasa por las acciones pendientes del cuadre. */
+export function expenseConfirmKeyboard(): InlineKeyboard {
+  return new InlineKeyboard()
+    .text('✅ Confirmar', `${CALLBACK.EXPENSE}:${EXPENSE_ACTION.CONFIRM}`)
+    .text('❌ Cancelar', `${CALLBACK.EXPENSE}:${EXPENSE_ACTION.CANCEL}`);
 }

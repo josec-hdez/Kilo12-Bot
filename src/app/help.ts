@@ -27,6 +27,12 @@ export const MVP_COMMANDS: readonly CommandHelp[] = [
     description: 'Fijar la tasa de cambio del día.',
   },
   {
+    command: 'gasto',
+    usage: '/gasto',
+    description:
+      'Registrar un gasto en la hoja Gastos (historial): fecha (hoy u otro día), cantidad, moneda y descripción. No cambia el cuadre.',
+  },
+  {
     command: 'deshacer',
     usage: '/deshacer',
     description: 'Revertir la última escritura en la hoja.',
@@ -103,8 +109,8 @@ export function helpText(role: Role): string {
   for (const entry of commandsFor(role)) lines.push(`${entry.usage} — ${entry.description}`);
   lines.push(
     '',
-    'Los botones de abajo hacen lo mismo sin escribir: los que necesitan un dato (día, producto, TC) te lo preguntan. /cancelar abandona la pregunta.',
-    'Toda escritura en la hoja pide confirmación antes (✅ / ❌).',
+    'Los botones de abajo hacen lo mismo sin escribir: los que necesitan un dato (día, producto, TC, gasto) te lo preguntan. /cancelar abandona la pregunta.',
+    'Toda escritura en una hoja pide confirmación antes (✅ / ❌).',
   );
   return lines.join('\n');
 }
