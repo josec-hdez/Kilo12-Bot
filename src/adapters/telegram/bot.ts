@@ -11,6 +11,19 @@ import {
   type CloseReview,
 } from '../../app/close-month.js';
 import { cancelPending, confirmPending } from '../../app/confirm.js';
+import {
+  ALIAS_PREPARE,
+  applyAliasChange,
+  EQUIVALENCE_REQUEST,
+  equivalenceListPages,
+  knownCuadreProducts,
+  parseEquivalenceArgs,
+  prepareAddAlias,
+  prepareRemoveAlias,
+  saveIpvAlias,
+  type AliasChange,
+  type EquivalenceDeps,
+} from '../../app/manage-equivalences.js';
 import { FREE_TEXT_REPLY, helpText } from '../../app/help.js';
 import {
   ASK_SHEET_DAY,
@@ -28,6 +41,7 @@ import {
   CONFIRM_STATUS,
   PREPARE_STATUS,
   type Actor,
+  type AliasQuestion,
   type PipelineDeps,
   type PrepareResult,
 } from '../../app/pipeline-types.js';
@@ -100,10 +114,13 @@ import {
   closeMonthKeyboard,
   confirmKeyboard,
   dayButtons,
+  equivalenceConfirmKeyboard,
   EXPENSE_ACTION,
   expenseConfirmKeyboard,
   expenseCurrencyKeyboard,
   expenseDateKeyboard,
+  IPV_ALIAS_ACTION,
+  ipvAliasKeyboard,
   productChoiceKeyboard,
   replyKeyboard,
   sheetSuggestionKeyboard,
@@ -269,6 +286,8 @@ const FLOW_CALLBACK_COMMAND: Readonly<Record<string, string>> = {
   [CALLBACK.EXPENSE]: '/gasto',
   [CALLBACK.BOOK]: '/cuadremes',
   [CALLBACK.CLOSE_MONTH]: '/cierremes',
+  [CALLBACK.EQUIVALENCE]: '/equivalencia',
+  [CALLBACK.IPV_ALIAS]: '/equivalencia',
 };
 
 /**
@@ -344,6 +363,24 @@ interface AwaitingReason {
   pendingId: string;
 }
 
+/**
+ * Productos del IPV sin equivalencia que se le preguntan a la dueña, uno por uno,
+ * después de la vista previa. Si elige alguno, la vista previa se rehace.
+ */
+interface AliasReview {
+  source: IpvSource;
+  sheet: string;
+  ref: DayRef;
+  /** Carga pendiente que se reemplaza al rehacer la vista previa (null si quedó bloqueada). */
+  pendingId: string | null;
+  questions: AliasQuestion[];
+  index: number;
+  /** Equivalencias guardadas en esta ronda. */
+  added: number;
+  /** Productos marcados como nuevos (o sin responder): no se vuelven a preguntar. */
+  skipped: string[];
+}
+
 interface ProductChoice {
   telegramId: number;
   request: ProductRequest;
@@ -392,6 +429,15 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
   const bookRegistrations = new TtlStore<BookRegistration>(CONVERSATION_TTL_MS, clock);
   /** Mes revisado con /cierremes esperando 🔒 Cerrar mes, por usuario. */
   const monthCloses = new TtlStore<MonthClose>(CONVERSATION_TTL_MS, clock);
+  /** Cambio de /equivalencia esperando ✅ Guardar, por usuario. */
+  const aliasChanges = new TtlStore<AliasChange>(CONVERSATION_TTL_MS, clock);
+  /** Preguntas de equivalencia de la última vista previa de /ipv, por usuario. */
+  const aliasReviews = new TtlStore<AliasReview>(CONVERSATION_TTL_MS, clock);
+  const equivalenceDeps = (): EquivalenceDeps => ({
+    catalog: deps.pipeline.catalog,
+    changeLog: deps.pipeline.changeLog,
+    settings: deps.settings,
+  });
   /** Fecha de hoy (con año) en la zona del negocio. */
   const today = () => todayDateIn(clock(), deps.timezone);
   const flowCommand = (telegramId: number) =>
@@ -446,6 +492,7 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
     source: IpvSource,
     sheet: string,
     ref: DayRef,
+    skipAliasQuestions: readonly string[] = [],
   ): Promise<void> {
     let ipv: IpvDay;
     try {
@@ -458,9 +505,66 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
     // El día va al libro de su mes (un IPV de diciembre cargado en enero es del año pasado).
     const month = monthOfRef(ipv, today());
     const prepared = await withTyping(ctx, () =>
-      prepareIpvLoad(deps.pipeline, actorOf(ctx), { ipv, tc: null, month }),
+      prepareIpvLoad(deps.pipeline, actorOf(ctx), {
+        ipv,
+        tc: null,
+        month,
+        skipAliasQuestions,
+      }),
     );
     await showPrepared(ctx, prepared);
+
+    const key = String(actorOf(ctx).telegramId);
+    aliasReviews.delete(key);
+    if (prepared.status === PREPARE_STATUS.REJECTED) return;
+    const questions = prepared.aliasQuestions ?? [];
+    if (questions.length === 0) return;
+    const review: AliasReview = {
+      source,
+      sheet,
+      ref,
+      pendingId: prepared.status === PREPARE_STATUS.READY ? prepared.pendingId : null,
+      questions,
+      index: 0,
+      added: 0,
+      skipped: [...skipAliasQuestions],
+    };
+    aliasReviews.set(key, review);
+    await askAlias(ctx, review);
+  }
+
+  /** «¿Es alguno de estos?» para el producto del IPV que toca. */
+  async function askAlias(ctx: BotContext, review: AliasReview): Promise<void> {
+    const question = review.questions[review.index];
+    if (question === undefined) return;
+    const position = `${String(review.index + 1)} de ${String(review.questions.length)}`;
+    await ctx.reply(
+      `🔗 (${position}) «${question.ipvProduct}» no está en el cuadre. ¿Es alguno de estos? Si eliges uno, la equivalencia queda guardada para siempre.`,
+      { reply_markup: ipvAliasKeyboard(question.candidates) },
+    );
+  }
+
+  /** Terminadas las preguntas: si se guardó alguna equivalencia, se rehace la vista previa. */
+  async function finishAliasReview(ctx: BotContext, review: AliasReview): Promise<void> {
+    const actor = actorOf(ctx);
+    aliasReviews.delete(String(actor.telegramId));
+    if (review.added === 0) {
+      await ctx.reply(
+        'Listo: no se guardó ninguna equivalencia. La vista previa de arriba sigue igual.',
+      );
+      return;
+    }
+    if (review.pendingId !== null) {
+      const cancelled = cancelPending(deps.pipeline, actor, review.pendingId);
+      if (cancelled.status !== CONFIRM_STATUS.DONE) {
+        await ctx.reply(
+          `Las equivalencias quedaron guardadas, pero la carga de arriba ya no está pendiente (${cancelled.message}). Valen desde la próxima carga del IPV.`,
+        );
+        return;
+      }
+    }
+    await ctx.reply('🔄 Rehago la vista previa con las equivalencias nuevas…');
+    await loadSheet(ctx, review.source, review.sheet, review.ref, review.skipped);
   }
 
   /** Hoja ya elegida: si no dice su día (título del POS o nombre), se pregunta; si lo dice, se carga. */
@@ -841,11 +945,53 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
     }
   }
 
+  // ------------------------------------------------------------ 🔗 /equivalencia
+  /** Sin datos: la lista. `cuadre = ipv` agrega; `quitar ipv` quita. Ambos piden ✅. */
+  async function equivalenceCommand(ctx: BotContext, args: string): Promise<void> {
+    const key = String(actorOf(ctx).telegramId);
+    aliasChanges.delete(key);
+    const request = parseEquivalenceArgs(args);
+    switch (request.kind) {
+      case EQUIVALENCE_REQUEST.INVALID:
+        await ctx.reply(request.message);
+        return;
+      case EQUIVALENCE_REQUEST.LIST:
+        for (const page of equivalenceListPages(deps.pipeline.catalog)) await ctx.reply(page);
+        return;
+      case EQUIVALENCE_REQUEST.ADD:
+      case EQUIVALENCE_REQUEST.REMOVE: {
+        const result =
+          request.kind === EQUIVALENCE_REQUEST.ADD
+            ? prepareAddAlias(
+                deps.pipeline.catalog,
+                request,
+                await withTyping(ctx, () =>
+                  knownCuadreProducts(deps.pipeline.catalog, deps.cuadre),
+                ),
+              )
+            : prepareRemoveAlias(deps.pipeline.catalog, request.ipv);
+        if (result.status === ALIAS_PREPARE.REJECTED) {
+          await ctx.reply(result.message);
+          return;
+        }
+        aliasChanges.set(key, result.change);
+        await ctx.reply(result.preview, { reply_markup: equivalenceConfirmKeyboard() });
+        return;
+      }
+    }
+  }
+
   async function cancel(ctx: BotContext): Promise<void> {
     const key = String(actorOf(ctx).telegramId);
     const hadReason = awaitingReason.get(key) !== undefined;
-    const hadFlow = flows.get(key) !== undefined || ipvChoices.get(key) !== undefined;
+    const hadFlow =
+      flows.get(key) !== undefined ||
+      ipvChoices.get(key) !== undefined ||
+      aliasReviews.get(key) !== undefined ||
+      aliasChanges.get(key) !== undefined;
     awaitingReason.delete(key);
+    aliasReviews.delete(key);
+    aliasChanges.delete(key);
     flows.delete(key);
     ipvChoices.delete(key);
     if (hadReason) await ctx.reply(BOT_TEXT.REASON_CANCELLED);
@@ -885,6 +1031,9 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
       case 'cierremes':
         await closeMonthCommand(ctx, args);
         return;
+      case 'equivalencia':
+        await equivalenceCommand(ctx, args);
+        return;
       case 'cancelar':
         await cancel(ctx);
         return;
@@ -908,6 +1057,7 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
     'deshacer',
     'cuadremes',
     'cierremes',
+    'equivalencia',
     'cancelar',
     ...Object.keys(reports),
   ]) {
@@ -1206,6 +1356,62 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
       return;
     }
     await ctx.reply(confirmMonthClose(closeDeps(), actor.telegramId, close));
+  });
+
+  // 🔗 /equivalencia: ✅ Guardar / ❌ Cancelar.
+  bot.callbackQuery(new RegExp(`^${CALLBACK.EQUIVALENCE}:(ok|no)$`), async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const actor = actorOf(ctx);
+    const key = String(actor.telegramId);
+    const change = aliasChanges.get(key);
+    aliasChanges.delete(key);
+    await removeKeyboard(ctx);
+    if (change === undefined) {
+      await ctx.reply(BOT_TEXT.FLOW_EXPIRED);
+      return;
+    }
+    if (ctx.match[1] === 'no') {
+      await ctx.reply(BOT_TEXT.FLOW_CANCELLED);
+      return;
+    }
+    await ctx.reply(applyAliasChange(equivalenceDeps(), actor.telegramId, change));
+  });
+
+  // 🔗 Producto del IPV sin equivalencia: un candidato, 🆕 Es nuevo o ⏭ Dejar de preguntar.
+  bot.callbackQuery(new RegExp(`^${CALLBACK.IPV_ALIAS}:(\\w+)$`), async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const actor = actorOf(ctx);
+    const review = aliasReviews.get(String(actor.telegramId));
+    await removeKeyboard(ctx);
+    const question = review?.questions[review.index];
+    if (review === undefined || question === undefined) {
+      await ctx.reply(BOT_TEXT.FLOW_EXPIRED);
+      return;
+    }
+    const answer = ctx.match[1] ?? '';
+    if (answer === IPV_ALIAS_ACTION.END) {
+      review.skipped.push(...review.questions.slice(review.index).map((q) => q.ipvProduct));
+      await finishAliasReview(ctx, review);
+      return;
+    }
+    if (answer === IPV_ALIAS_ACTION.NEW) {
+      review.skipped.push(question.ipvProduct);
+      await ctx.reply(`🆕 «${question.ipvProduct}» queda como producto nuevo.`);
+    } else {
+      const product = question.candidates[Number(answer)];
+      if (product === undefined) {
+        await ctx.reply(BOT_TEXT.FLOW_EXPIRED);
+        return;
+      }
+      await ctx.reply(
+        saveIpvAlias(equivalenceDeps(), actor.telegramId, product, question.ipvProduct),
+      );
+      review.added++;
+    }
+    review.index++;
+    aliasReviews.set(String(actor.telegramId), review);
+    if (review.index < review.questions.length) await askAlias(ctx, review);
+    else await finishAliasReview(ctx, review);
   });
 
   // Menú en línea de versiones anteriores: sigue funcionando desde el historial del chat.
