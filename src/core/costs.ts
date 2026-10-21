@@ -40,3 +40,26 @@ export function lookupCost(catalog: CostCatalog, product: string): CatalogEntry 
 export function catalogProducts(catalog: CostCatalog): string[] {
   return [...catalog.values()].map((entry) => entry.product);
 }
+
+/**
+ * Pestañas del cuadre anteriores a un día (`01`…`13` para el 14), de la más vieja a la
+ * más nueva: de ahí sale el último costo conocido de cada producto.
+ */
+export function cuadreTabsBefore(tabs: readonly string[], day: number): string[] {
+  return tabs
+    .map((tab) => tab.trim())
+    .filter((tab) => /^\d{1,2}$/.test(tab) && Number(tab) < day)
+    .sort((a, b) => Number(a) - Number(b));
+}
+
+/**
+ * Último costo conocido de cada producto. Manda el cuadre, fuente de verdad de costos:
+ * sus pestañas en orden cronológico pisan al respaldo (el catálogo de SQLite), y un
+ * costo vacío o 0 no borra el que ya se conocía.
+ */
+export function buildLastKnownCosts(
+  fallback: readonly CostSource[],
+  days: readonly (readonly CostSource[])[],
+): CostCatalog {
+  return buildCostCatalog([...fallback, ...days.flat()]);
+}
