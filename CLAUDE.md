@@ -58,7 +58,7 @@ En ambos:
 
 ### 3. Tabla de equivalencias de productos
 
-El IPV y el cuadre usan nombres distintos. Mantén y usa esta tabla, y amplíala cuando aparezcan productos nuevos, previa confirmación del dueño:
+El IPV y el cuadre usan nombres distintos. Esta tabla es el **conjunto inicial**: el bot la carga al arrancar y, desde ahí, las dueñas las gestionan con `/equivalencia` o eligiendo un candidato en la vista previa de `/ipv` (lo que cambian desde el bot manda sobre esta tabla). Amplíala cuando aparezcan productos nuevos, previa confirmación del dueño:
 
 | Cuadre | IPV |
 |---|---|
