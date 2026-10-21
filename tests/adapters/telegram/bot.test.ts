@@ -95,6 +95,7 @@ let accessLog: SqliteAccessLogRepository;
 let bot: ReturnType<typeof createBot>;
 let updateId: number;
 let settingsRepo: SqliteSettingsRepository;
+let catalogRepo: SqliteCatalogRepository;
 /** Pestañas de las hojas que /cuadremes puede abrir (ID → pestañas). */
 let bookTabs: Record<string, string[]>;
 
@@ -124,6 +125,7 @@ beforeEach(async () => {
   const users = new SqliteUserRepository(db);
   const settings = new SqliteSettingsRepository(db);
   settingsRepo = settings;
+  catalogRepo = catalog;
   bookTabs = {};
   seedAll(
     { users, catalog, settings },
@@ -1133,7 +1135,11 @@ describe('equivalencias', () => {
     expect(sent.some((m) => m.text.startsWith('🔄 Rehago la vista previa'))).toBe(true);
     expect(changeLog.list()).toMatchObject([
       { telegramId: OWNER, action: 'add_equivalence', target: 'cerveza beck' },
+      { telegramId: OWNER, action: 'add_product', target: 'cigarro popular verde caja' },
     ]);
+    // 🆕 Es nuevo lo guarda en el catálogo: ya no queda "sin equivalencia".
+    expect(catalogRepo.findProduct('cigarro popular verde caja')).toBeDefined();
+    expect(again.text).not.toContain('Sin equivalencia');
 
     // La vista previa vieja ya no se puede confirmar; la nueva sí.
     await click(OWNER, button('ok', first));
