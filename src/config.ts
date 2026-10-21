@@ -39,6 +39,17 @@ const envSchema = z.object({
   GOOGLE_SA_JSON: optionalString,
   DRIVE_IPV_FOLDER_ID: optionalString,
   CUADRE_SHEET_ID: optionalString,
+  // Vacía cuenta como ausente (la plantilla .env.example la trae sin valor).
+  CUADRE_SHEET_MONTH: z.preprocess(
+    (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+    z
+      .string()
+      .regex(
+        /^\d{4}-(0[1-9]|1[0-2])$/,
+        'CUADRE_SHEET_MONTH debe ser un mes AAAA-MM, por ejemplo 2026-10',
+      )
+      .default('2026-10'),
+  ),
   CUADRE_SEED_PATH: optionalString,
   GASTOS_SPREADSHEET_ID: optionalString,
   APP_VERSION: optionalString,
@@ -54,6 +65,11 @@ export interface Config {
   googleServiceAccountJson: string | undefined;
   driveIpvFolderId: string | undefined;
   cuadreSheetId: string | undefined;
+  /**
+   * Mes del libro de CUADRE_SHEET_ID (`2026-10`). Al arrancar queda registrado para ese
+   * mes; los demás meses se registran con /cuadremes.
+   */
+  cuadreSheetMonth: string;
   /** Cuadre exportado (.xlsx) para la carga inicial del catálogo si la base está vacía. */
   cuadreSeedPath: string | undefined;
   /** Hoja "Gastos": historial de gastos que llena /gasto. */
@@ -85,6 +101,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     googleServiceAccountJson: parsed.GOOGLE_SA_JSON,
     driveIpvFolderId: parsed.DRIVE_IPV_FOLDER_ID,
     cuadreSheetId: parsed.CUADRE_SHEET_ID,
+    cuadreSheetMonth: parsed.CUADRE_SHEET_MONTH,
     cuadreSeedPath: parsed.CUADRE_SEED_PATH,
     expensesSheetId: parsed.GASTOS_SPREADSHEET_ID,
     dbPath: parsed.DB_PATH,
