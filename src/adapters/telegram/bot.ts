@@ -50,7 +50,6 @@ import { parseValidateArgs, runValidation } from '../../app/validate-report.js';
 import { can, PERMISSION } from '../../core/auth.js';
 import { buildAliasIndex } from '../../core/mapping.js';
 import { SETTING } from '../../core/settings.js';
-import { parseIpvTabDate } from '../../core/tabs.js';
 import type { DayRef, IpvDay } from '../../core/types.js';
 import type { IpvSource } from '../../ports/ipv-source.js';
 import type { CuadreReader } from '../../ports/cuadre-source.js';
@@ -397,10 +396,10 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
     await showPrepared(ctx, prepared);
   }
 
-  /** Hoja ya elegida: si su nombre no dice el día, se pregunta; si lo dice, se carga. */
+  /** Hoja ya elegida: si no dice su día (título del POS o nombre), se pregunta; si lo dice, se carga. */
   async function useSheet(ctx: BotContext, source: IpvSource, sheets: string[], sheet: string) {
     const key = String(actorOf(ctx).telegramId);
-    const ref = parseIpvTabDate(sheet);
+    const ref = source.sheetDate(sheet);
     if (ref === null) {
       ipvChoices.set(key, { step: IPV_STEP.DAY, source, sheets, sheet });
       await ctx.reply(`Hoja «${sheet}». ${ASK_SHEET_DAY}`);
