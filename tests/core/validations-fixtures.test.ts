@@ -3,7 +3,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { CuadreXlsxReader } from '../../src/adapters/xlsx/cuadre-xlsx-reader.js';
 import { ExcelIpvSource } from '../../src/adapters/xlsx/excel-ipv-source.js';
 import { SALES_CHECK, checkIpvSales, computeTotals } from '../../src/core/calc.js';
-import { buildCostCatalog } from '../../src/core/costs.js';
+import { buildCostCatalog, buildLastKnownCosts, cuadreTabsBefore } from '../../src/core/costs.js';
 import { buildCuadreDraft } from '../../src/core/cuadre-builder.js';
 import { EQUIVALENCES } from '../../src/core/equivalences.js';
 import type { CuadreSheet } from '../../src/core/types.js';
@@ -167,5 +167,30 @@ describe('IPV del POS del 14 oct', () => {
     expect(
       ipvLoadBlockers(validateIpv(ipv), checkIpvSales(draft.rows, ipv.importeTotal, ipv.format)),
     ).toEqual([]);
+  });
+
+  it('toma los costos de los días anteriores del cuadre y empareja los nombres del POS', async () => {
+    const source = await ExcelIpvSource.fromFile(fixture('IPV POS 2026-10-14.xlsx'));
+    const cuadre = await CuadreXlsxReader.fromFile(fixture('Cuadre K12 Remoto.xlsx'));
+    const ipv = source.readDay({ day: 14, month: 10 });
+    const days = cuadreTabsBefore(cuadre.listDays(), ipv.day).map(
+      (tab) => cuadre.readDay(tab).rows,
+    );
+    const draft = buildCuadreDraft(ipv, buildLastKnownCosts([], days), EQUIVALENCES);
+
+    const byIpvName = (name: string) =>
+      draft.rows.find((row) => row.sourceIpvProducts.includes(name));
+    for (const [ipvName, cuadreName] of [
+      ['cuadrito de pollo', 'cuadrito de pollo'],
+      ['arroz el rey', 'arroz'],
+      ['top mix', 'mani'],
+      ['ketcup vima', 'ketchup'],
+      ['panque chocopaye', 'choco paye'],
+      ['papel higienico paquete', 'papel sanitario'],
+    ] as const) {
+      const row = byIpvName(ipvName);
+      expect(row?.product.trim()).toBe(cuadreName);
+      expect(row?.costo).toBeGreaterThan(0);
+    }
   });
 });
