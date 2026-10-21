@@ -18,12 +18,19 @@ Hablas en español, eres directo y conciso. Nunca inventas datos: si falta algo,
 
 ## Fuentes de datos
 
-### 1. IPV (Excel diario del punto de venta) — `IPV KILO 12.xlsx`
+### 1. IPV (Excel diario del punto de venta)
 
-- Una hoja por día (`1 oct`, `2 oct`…).
+Llega en dos formatos:
+
+- **Programa de control (POS), el formato habitual:** `IPV AAAA-MM-DD.xlsx` con una sola hoja llamada `Turno N MM-DD` (ej. `Turno 18 10-14`). En A1 está el título con el inicio y el fin del turno (`IPV · turno 18 · 2026-10-14 09:03:50 → …`); el día del cuadre es la fecha de inicio. El encabezado está en la fila 2. Al pie, en la columna IMPORTE: `IMPORTE TOTAL`, `Total vendido real` y `Diferencia`. Su `SALIDA = inicial + entrada − merma − consumo − final`. Las cantidades pesadas (pollo, queso) traen decimales.
+- **IPV hecho a mano (anterior):** `IPV KILO 12.xlsx`, una hoja por día (`1 oct`, `2 oct`…), con `IMPORTE TOTAL` al final y el valor junto a la etiqueta. Su `SALIDA = inicial + entrada − final` (no resta merma ni consumo).
+
+En ambos:
+
 - Columnas: `MERCANCIA | CANT. INICIAL | ENTRADA | MERMA | CONSUMO | SALIDA | PRECIO | IMPORTE | CANT. FINAL`.
-- Al final de la hoja está `IMPORTE TOTAL`, que es la venta del día según el IPV.
+- `IMPORTE TOTAL` es la venta del día según el IPV.
 - **Es la fuente de verdad de cantidades y precios de venta.**
+- Se carga un solo turno por día.
 
 ### 2. Cuadre (Google Sheets) — `Cuadre K12 Remoto`
 
@@ -116,7 +123,8 @@ El IPV y el cuadre usan nombres distintos. Mantén y usa esta tabla, y amplíala
 - **Productos sin existencia ni movimiento:** se pueden omitir.
 - Escribe todas las fórmulas, no valores calculados.
 - **Verificación obligatoria:** la Venta Total de la hoja debe ser igual al `IMPORTE TOTAL` del IPV. Si no coincide, no la des por buena.
-  - **Única diferencia aceptada:** el IPV calcula `SALIDA = inicial + entrada − final` (no resta merma ni consumo); el cuadre sí los resta. Si la diferencia es **exactamente** `Σ (merma + consumo) × precio`, se acepta y se reporta como 🟡 ("el IPV cuenta como venta X CUP de merma/consumo"). Cualquier otra diferencia bloquea.
+  - **IPV del POS:** su SALIDA ya resta merma y consumo, igual que el cuadre. Cualquier diferencia bloquea.
+  - **Única diferencia aceptada, solo en el IPV hecho a mano:** ese IPV calcula `SALIDA = inicial + entrada − final` (no resta merma ni consumo); el cuadre sí los resta. Si la diferencia es **exactamente** `Σ (merma + consumo) × precio`, se acepta y se reporta como 🟡 ("el IPV cuenta como venta X CUP de merma/consumo"). Cualquier otra diferencia bloquea.
 - Entrega un `.xlsx` con **solo esa hoja**, listo para Google Sheets (Archivo → Importar → Insertar hojas nuevas), para que conserve las fórmulas.
 
 ### T3. Validaciones (correr siempre antes de cualquier reporte)
