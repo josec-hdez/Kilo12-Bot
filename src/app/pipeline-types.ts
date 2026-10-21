@@ -6,6 +6,7 @@ import type {
   PendingActionRepository,
   SnapshotRepository,
 } from '../ports/repositories.js';
+import type { CuadreReader } from '../ports/cuadre-source.js';
 import type { SheetsGateway } from '../ports/sheets-gateway.js';
 
 /**
@@ -17,6 +18,8 @@ export interface PipelineDeps {
   sheets: SheetsGateway;
   pending: PendingActionRepository;
   catalog: CatalogRepository;
+  /** Lectura del cuadre: de sus pestañas sale el último costo conocido al cargar el IPV. */
+  cuadre: CuadreReader;
   changeLog: ChangeLogRepository;
   snapshots: SnapshotRepository;
   clock: Clock;

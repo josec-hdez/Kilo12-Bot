@@ -138,11 +138,18 @@ export interface SeedSummary {
   equivalences: EquivalenceSeedResult | null;
 }
 
-/** Carga inicial en el orden correcto: dueñas, configuración, catálogo y equivalencias. */
+/**
+ * Carga inicial en el orden correcto: dueñas, configuración, catálogo y equivalencias.
+ * Con el catálogo ya cargado (una base desplegada), solo suma las equivalencias nuevas
+ * de la tabla: es idempotente y no toca costos ni nombres.
+ */
 export function seedAll(deps: SeedDeps, input: SeedInput): SeedSummary {
   seedOwners(deps.users, input.ownerIds);
   seedSettings(deps.settings);
-  if (input.cuadre === null) return { catalog: null, equivalences: null };
+  if (input.cuadre === null) {
+    if (deps.catalog.listProducts().length === 0) return { catalog: null, equivalences: null };
+    return { catalog: null, equivalences: seedEquivalences(deps.catalog, input.equivalences) };
+  }
 
   const catalog = seedCatalogFromCuadre(deps.catalog, input.cuadre.rows, input.cuadre.source);
   const equivalences = seedEquivalences(deps.catalog, input.equivalences);

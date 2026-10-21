@@ -1,6 +1,6 @@
 import { can, PERMISSION } from '../core/auth.js';
 import { checkIpvSales, computeTotals } from '../core/calc.js';
-import { buildCostCatalog } from '../core/costs.js';
+import { buildLastKnownCosts, cuadreTabsBefore, type CostSource } from '../core/costs.js';
 import { buildCuadreDraft } from '../core/cuadre-builder.js';
 import { TC_VALUE_CELL } from '../core/cuadre-layout.js';
 import { formatDayRef } from '../core/tabs.js';
@@ -39,14 +39,6 @@ export async function prepareIpvLoad(
   actor: Actor,
   { ipv, tc }: LoadIpvRequest,
 ): Promise<PrepareResult> {
-  const costSources = deps.catalog.costSources();
-  if (costSources.length === 0) {
-    return {
-      status: PREPARE_STATUS.REJECTED,
-      message: 'El catálogo está vacío: hay que cargar los costos del cuadre antes del primer IPV.',
-    };
-  }
-
   const tab = dayTab(ipv);
   const tabs = await deps.sheets.listTabs();
   if (tabs.some((existing) => existing.title === tab)) {
@@ -56,7 +48,26 @@ export async function prepareIpvLoad(
     };
   }
 
-  const draft = buildCuadreDraft(ipv, buildCostCatalog(costSources), deps.catalog.equivalences());
+  let cuadreCosts: CostSource[][];
+  try {
+    const previous = cuadreTabsBefore(await deps.cuadre.listDays(), ipv.day);
+    cuadreCosts = (await deps.cuadre.readDays(previous)).map((sheet) => sheet.rows);
+  } catch (error) {
+    return {
+      status: PREPARE_STATUS.REJECTED,
+      message: `No pude leer los costos del cuadre: ${errorText(error)}. Prueba de nuevo en un momento.`,
+    };
+  }
+  const costs = buildLastKnownCosts(deps.catalog.costSources(), cuadreCosts);
+  if (costs.size === 0) {
+    return {
+      status: PREPARE_STATUS.REJECTED,
+      message:
+        'No hay costos: el cuadre no tiene días anteriores y el catálogo está vacío. Carga los costos antes del primer IPV.',
+    };
+  }
+
+  const draft = buildCuadreDraft(ipv, costs, deps.catalog.equivalences());
   const totals = computeTotals(draft.rows);
   const sales = checkIpvSales(draft.rows, ipv.importeTotal, ipv.format);
   const ipvFindings = validateIpv(ipv);

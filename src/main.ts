@@ -108,6 +108,14 @@ async function main(): Promise<void> {
       `base de datos en ${config.dbPath}, ${String(products)} productos en el catálogo` +
       (summary.catalog === null ? '.' : ` (carga inicial desde ${config.cuadreSeedPath ?? ''}).`),
   );
+  if (summary.equivalences !== null && summary.equivalences.addedAliases > 0) {
+    console.log(
+      `Equivalencias: ${String(summary.equivalences.addedAliases)} nuevas en el catálogo.`,
+    );
+  }
+  for (const conflict of summary.equivalences?.conflicts ?? []) {
+    console.warn(`⚠️ Equivalencia "${conflict.alias}" → "${conflict.product}": ${conflict.reason}`);
+  }
   if (config.useFakeExpenses) {
     console.warn(
       '⚠️ /gasto guarda en memoria (faltan GOOGLE_SA_JSON o GASTOS_SPREADSHEET_ID): los gastos se pierden al reiniciar.',
@@ -124,6 +132,7 @@ async function main(): Promise<void> {
       pipeline: {
         sheets,
         catalog,
+        cuadre,
         pending: new SqlitePendingActionRepository(db, clock),
         changeLog: new SqliteChangeLogRepository(db),
         snapshots: new SqliteSnapshotRepository(db, clock),
