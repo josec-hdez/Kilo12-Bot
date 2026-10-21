@@ -9,8 +9,9 @@ import type { DayRef, IpvDay } from '../core/types.js';
 import { ipvLoadBlockers, salesFindings, sortFindings, validateIpv } from '../core/validations.js';
 import { PENDING_KIND, SNAPSHOT_KIND } from '../ports/repositories.js';
 import { YELLOW } from '../ports/sheets-gateway.js';
+import { sheetCostRows, syncCatalog } from './catalog-sync.js';
 import { closedMonthBlocker, isMonthClosed } from './closed-months.js';
-import { bookOfWrite, noBookMessage, previousBook } from './cuadre-books.js';
+import { bookOfWrite, noBookMessage, previousBook, readBookRegistry } from './cuadre-books.js';
 import type { LoadIpvPayload } from './pending-payloads.js';
 import {
   PREPARE_STATUS,
@@ -154,6 +155,9 @@ export async function prepareIpvLoad(
   };
 }
 
+const isLaterDay = (title: string, tab: string): boolean =>
+  /^\d{1,2}$/.test(title.trim()) && Number(title) > Number(tab);
+
 const errorText = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
@@ -196,11 +200,16 @@ export async function executeIpvLoad(
   });
 
   let created = false;
+  let latestDay: boolean;
   try {
     await ensureTemplate(sheets);
-    if ((await sheets.listTabs()).some((existing) => existing.title === tab)) {
+    const existingTabs = await sheets.listTabs();
+    if (existingTabs.some((existing) => existing.title === tab)) {
       throw new Error(`La pestaña ${tab} apareció mientras se confirmaba; no se sobrescribe.`);
     }
+    latestDay =
+      !existingTabs.some((existing) => isLaterDay(existing.title, tab)) &&
+      !Object.keys(readBookRegistry(deps.settings)).some((month) => month > book.month);
     await sheets.duplicateTab(TEMPLATE_TAB, tab, { hidden: false });
     created = true;
 
@@ -222,12 +231,23 @@ export async function executeIpvLoad(
     return { ok: false, message: `No se pudo crear la pestaña ${tab}: ${errorText(error)}` };
   }
 
-  // `_config` y `Resumen` son espejos: si fallan, la carga del día sigue siendo válida.
+  // El catálogo sigue al cuadre: productos nuevos y costos cambiados. Los costos solo si
+  // es el día más reciente (rehacer un día viejo no devuelve el catálogo a costos viejos).
+  // Si falla, la pestaña ya está escrita y vale igual; se reintenta en la próxima carga.
   let configNote = '';
+  try {
+    syncCatalog(deps.catalog, sheetCostRows(payload.sheetValues), `cuadre:${book.month}-${tab}`, {
+      costs: latestDay,
+    });
+  } catch (error) {
+    configNote = `\n⚠️ No se pudo actualizar el catálogo: ${errorText(error)}`;
+  }
+
+  // `_config` y `Resumen` son espejos: si fallan, la carga del día sigue siendo válida.
   try {
     await syncConfigTab(sheets, deps.catalog.listProducts(), deps.clock());
   } catch (error) {
-    configNote = `\n⚠️ No se pudo actualizar _config: ${errorText(error)}`;
+    configNote += `\n⚠️ No se pudo actualizar _config: ${errorText(error)}`;
   }
   try {
     await ensureSummaryTab(sheets);
