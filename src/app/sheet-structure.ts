@@ -5,12 +5,14 @@ import {
   rowFormulas,
   summaryCells,
 } from '../core/cuadre-layout.js';
+import { SUMMARY_TAB, summaryTabGrid, summaryTabRange } from '../core/month-summary.js';
 import type { Product } from '../ports/repositories.js';
 import type { CellValue, RangeWrite, SheetsGateway } from '../ports/sheets-gateway.js';
 
 /**
  * Pestañas de servicio aprobadas por las dueñas: `_plantilla` (oculta, base de cada
- * día) y `_config` (espejo de solo lectura del catálogo). No se crean `_bak_*`.
+ * día), `_config` (espejo de solo lectura del catálogo) y `Resumen` (una fila por
+ * día del mes). No se crean `_bak_*`.
  */
 export const TEMPLATE_TAB = '_plantilla';
 export const CONFIG_TAB = '_config';
@@ -107,4 +109,18 @@ export async function syncConfigTab(
     { tab: CONFIG_TAB, a1: 'A1:A1', values: grid.slice(0, 1) },
     { tab: CONFIG_TAB, a1: `A2:F${lastRow}`, values: grid.slice(1) },
   ]);
+}
+
+/**
+ * Crea `Resumen` si el libro no la tiene. Si ya existe no la toca: sus fórmulas leen
+ * cada día con INDIRECT, así que no hay que actualizarla al crear o borrar un día, y
+ * las dueñas pueden haberle agregado columnas o formato.
+ */
+export async function ensureSummaryTab(sheets: SheetsGateway): Promise<EnsureResult> {
+  const tabs = await sheets.listTabs();
+  if (tabs.some((tab) => tab.title === SUMMARY_TAB)) return { created: false };
+
+  await sheets.addTab(SUMMARY_TAB, { hidden: false });
+  await sheets.writeRanges([{ tab: SUMMARY_TAB, a1: summaryTabRange(), values: summaryTabGrid() }]);
+  return { created: true };
 }
