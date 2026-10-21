@@ -132,7 +132,7 @@ describe('IPV del 4 oct (finales vacías)', () => {
     expect(emptyFinals.every((f) => f.severity === SEVERITY.RED)).toBe(true);
 
     const draft = buildCuadreDraft(ipv, buildCostCatalog(cuadre.readDay('05').rows), EQUIVALENCES);
-    const sales = checkIpvSales(draft.rows, ipv.importeTotal);
+    const sales = checkIpvSales(draft.rows, ipv.importeTotal, ipv.format);
     const blockers = ipvLoadBlockers(ipvFindings, sales);
     expect(blockers.length).toBeGreaterThan(0);
     expect(blockers.some((b) => b.code === FINDING_CODE.EMPTY_FINAL)).toBe(true);
@@ -146,8 +146,26 @@ describe('IPV del 4 oct (finales vacías)', () => {
     const cuadre = await CuadreXlsxReader.fromFile(fixture('Cuadre K12 Remoto.xlsx'));
     const ipv = source.readDay({ day: 3, month: 10 });
     const draft = buildCuadreDraft(ipv, buildCostCatalog(cuadre.readDay('05').rows), EQUIVALENCES);
-    expect(ipvLoadBlockers(validateIpv(ipv), checkIpvSales(draft.rows, ipv.importeTotal))).toEqual(
-      [],
-    );
+    expect(
+      ipvLoadBlockers(validateIpv(ipv), checkIpvSales(draft.rows, ipv.importeTotal, ipv.format)),
+    ).toEqual([]);
+  });
+});
+
+describe('IPV del POS del 14 oct', () => {
+  it('la venta del cuadre es igual al IMPORTE TOTAL, sin tolerancia por merma', async () => {
+    const source = await ExcelIpvSource.fromFile(fixture('IPV POS 2026-10-14.xlsx'));
+    const cuadre = await CuadreXlsxReader.fromFile(fixture('Cuadre K12 Remoto.xlsx'));
+    const ipv = source.readDay({ day: 14, month: 10 });
+    const draft = buildCuadreDraft(ipv, buildCostCatalog(cuadre.readDay('05').rows), EQUIVALENCES);
+
+    // Hay 6 toallitas de merma: el POS ya no las cuenta como venta.
+    expect(checkIpvSales(draft.rows, ipv.importeTotal, ipv.format)).toEqual({
+      status: SALES_CHECK.MATCH,
+      ventaTotal: 112_845.5,
+    });
+    expect(
+      ipvLoadBlockers(validateIpv(ipv), checkIpvSales(draft.rows, ipv.importeTotal, ipv.format)),
+    ).toEqual([]);
   });
 });
