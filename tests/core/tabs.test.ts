@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { findIpvTab, normalizeName, parseIpvTabDate } from '../../src/core/tabs.js';
+import {
+  findIpvTab,
+  normalizeName,
+  parseIpvTabDate,
+  parsePosTabDate,
+  parsePosTitleDate,
+} from '../../src/core/tabs.js';
 
 describe('normalizeName', () => {
   it('quita espacios sobrantes, acentos y mayúsculas', () => {
@@ -23,6 +29,35 @@ describe('parseIpvTabDate', () => {
 
   it.each(['Hoja1', 'IPV Alf. 30 sep', '45 oct', '3 xyz', ''])('ignora %j', (tab) => {
     expect(parseIpvTabDate(tab)).toBeNull();
+  });
+});
+
+describe('parsePosTabDate', () => {
+  it.each([
+    ['Turno 18 10-14', { day: 14, month: 10 }],
+    ['turno 3 11-02', { day: 2, month: 11 }],
+    [' Turno  7  9-30 ', { day: 30, month: 9 }],
+  ])('reconoce %j como MM-DD', (tab, expected) => {
+    expect(parsePosTabDate(tab)).toEqual(expected);
+  });
+
+  it.each(['14 oct', 'Turno 18', 'Turno 18 14-10', 'Turno 18 10-32', 'Hoja1'])(
+    'ignora %j',
+    (tab) => {
+      expect(parsePosTabDate(tab)).toBeNull();
+    },
+  );
+});
+
+describe('parsePosTitleDate', () => {
+  it('toma la fecha de inicio del turno', () => {
+    expect(parsePosTitleDate('IPV · turno 18 · 2026-10-14 09:03:50 → 2026-10-15 01:10:00')).toEqual(
+      { day: 14, month: 10 },
+    );
+  });
+
+  it.each(['MERCANCIA', 'Venta 2026-10-14', 'IPV del 14 oct', ''])('ignora %j', (title) => {
+    expect(parsePosTitleDate(title)).toBeNull();
   });
 });
 
