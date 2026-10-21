@@ -4,8 +4,8 @@ import { FIRST_DATA_ROW, rowFormulas, type RowFormulas } from './cuadre-layout.j
 import type { Equivalence } from './equivalences.js';
 import {
   buildAliasIndex,
+  equivalenceCandidates,
   resolveIpvProduct,
-  suggestMatches,
   type MatchSuggestion,
 } from './mapping.js';
 import type { DayRef, IpvDay, IpvRow } from './types.js';
@@ -43,7 +43,15 @@ export interface CuadreDraft extends DayRef {
   /** Productos del IPV sin existencia ni movimiento, que no se escriben. */
   omitted: string[];
   warnings: string[];
+  /** Productos del cuadre que suman filas del IPV con precios distintos. */
+  priceConflicts: PriceConflict[];
   ipvImporteTotal: number | null;
+}
+
+export interface PriceConflict {
+  product: string;
+  ipvProducts: string[];
+  prices: number[];
 }
 
 interface Group {
@@ -65,10 +73,15 @@ function sumNullable(values: readonly (number | null)[]): number | null {
   return Math.round(present.reduce((total, value) => total + value, 0) * 1000) / 1000;
 }
 
-function groupPrice(group: Group, warnings: string[]): number | null {
+function groupPrice(group: Group, warnings: string[], conflicts: PriceConflict[]): number | null {
   const prices = [...new Set(group.rows.map((row) => row.precio).filter((p) => p !== null))];
   if (prices.length <= 1) return prices[0] ?? null;
 
+  conflicts.push({
+    product: group.product,
+    ipvProducts: [...new Set(group.rows.map((row) => row.product))],
+    prices,
+  });
   warnings.push(
     `${group.product}: las filas sumadas del IPV tienen precios distintos (${prices.join(', ')}). ` +
       'Se usa el primero; revisa la venta antes de confirmar.',
@@ -93,6 +106,7 @@ export function buildCuadreDraft(
   const unmatched: UnmatchedProduct[] = [];
   const omitted: string[] = [];
   const warnings: string[] = [];
+  const priceConflicts: PriceConflict[] = [];
 
   for (const row of ipv.rows) {
     if (!hasStockOrMovement(row)) {
@@ -111,7 +125,7 @@ export function buildCuadreDraft(
       if (match === null) {
         unmatched.push({
           ipvProduct: row.product,
-          suggestions: suggestMatches(row.product, products),
+          suggestions: equivalenceCandidates(row.product, products),
         });
       }
     }
@@ -127,7 +141,7 @@ export function buildCuadreDraft(
       rowNumber,
       product: group.product,
       costo,
-      precio: groupPrice(group, warnings),
+      precio: groupPrice(group, warnings, priceConflicts),
       inicio: sum('inicial'),
       entradas: sum('entrada'),
       merma: sum('merma'),
@@ -152,6 +166,7 @@ export function buildCuadreDraft(
     unmatched,
     omitted,
     warnings,
+    priceConflicts,
     ipvImporteTotal: ipv.importeTotal,
   };
 }
