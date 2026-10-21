@@ -26,6 +26,8 @@ export const BUTTON_FLOW = {
   ASK_TC: 'ask_tc',
   /** "Envía el Excel del IPV". */
   ASK_IPV: 'ask_ipv',
+  /** Fecha [Hoy]/[Otro día] → cantidad → moneda → descripción → ✅. */
+  ASK_EXPENSE: 'ask_expense',
 } as const;
 
 export type ButtonFlow = (typeof BUTTON_FLOW)[keyof typeof BUTTON_FLOW];
@@ -42,7 +44,7 @@ export const MENU_BUTTONS: readonly MenuButton[] = [
   { label: '📆 Mes', command: 'mes', flow: BUTTON_FLOW.RUN },
   { label: '🗓 Semana', command: 'semana', flow: BUTTON_FLOW.RUN },
   { label: '💰 Ganancia', command: 'ganancia', flow: BUTTON_FLOW.RUN },
-  { label: '💸 Gastos', command: 'gastos', flow: BUTTON_FLOW.RUN },
+  { label: '📊 Gastos', command: 'gastos', flow: BUTTON_FLOW.RUN },
   { label: '📦 Inversión', command: 'inversion', flow: BUTTON_FLOW.RUN },
   { label: '🏆 Top', command: 'top', flow: BUTTON_FLOW.ASK_TOP_METRIC },
   { label: '📊 Margen', command: 'margen', flow: BUTTON_FLOW.RUN },
@@ -53,6 +55,7 @@ export const MENU_BUTTONS: readonly MenuButton[] = [
   { label: '📥 IPV', command: 'ipv', flow: BUTTON_FLOW.ASK_IPV },
   { label: '🔎 Validar', command: 'validar', flow: BUTTON_FLOW.RUN },
   { label: '💱 TC', command: 'tc', flow: BUTTON_FLOW.ASK_TC },
+  { label: '➕ Gasto', command: 'gasto', flow: BUTTON_FLOW.ASK_EXPENSE },
   { label: '↩️ Deshacer', command: 'deshacer', flow: BUTTON_FLOW.RUN },
   { label: '❓ Ayuda', command: 'ayuda', flow: BUTTON_FLOW.RUN },
 ];
@@ -103,6 +106,7 @@ const MENU_DESCRIPTION: Readonly<Record<string, string>> = {
   ipv: 'Cargar el IPV del día',
   validar: 'Revisar errores del cuadre',
   tc: 'Fijar la tasa de cambio del día',
+  gasto: 'Registrar un gasto en el historial',
   deshacer: 'Revertir la última escritura',
   hoy: 'Resumen de hoy',
   dia: 'Resumen de un día',

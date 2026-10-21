@@ -43,16 +43,33 @@ import {
   type ReportResult,
 } from '../../app/reports.js';
 import { esc } from '../../app/report-format.js';
+import {
+  answerExpense,
+  chooseCurrency,
+  chooseOtherDay,
+  chooseToday,
+  completeExpense,
+  datePrompt,
+  EXPENSE_STEP,
+  EXPENSE_TEXT,
+  expensePreview,
+  RECORD_STATUS,
+  recordExpense,
+  startExpense,
+  type ExpenseDraft,
+} from '../../app/record-expense.js';
 import { prepareSetTc } from '../../app/set-tc.js';
-import { todayIn } from '../../app/today.js';
+import { todayDateIn, todayIn } from '../../app/today.js';
 import { prepareUndo } from '../../app/undo.js';
 import { parseValidateArgs, runValidation } from '../../app/validate-report.js';
 import { can, PERMISSION } from '../../core/auth.js';
+import { parseExpenseCurrency } from '../../core/expense.js';
 import { buildAliasIndex } from '../../core/mapping.js';
 import { SETTING } from '../../core/settings.js';
 import type { DayRef, IpvDay } from '../../core/types.js';
 import type { IpvSource } from '../../ports/ipv-source.js';
 import type { CuadreReader } from '../../ports/cuadre-source.js';
+import type { ExpenseLog } from '../../ports/expense-log.js';
 import type { SettingsRepository } from '../../ports/repositories.js';
 import { ExcelIpvSource, IpvFormatError } from '../xlsx/excel-ipv-source.js';
 import type { BotContext } from './context.js';
@@ -62,6 +79,10 @@ import {
   CALLBACK,
   confirmKeyboard,
   dayButtons,
+  EXPENSE_ACTION,
+  expenseConfirmKeyboard,
+  expenseCurrencyKeyboard,
+  expenseDateKeyboard,
   productChoiceKeyboard,
   replyKeyboard,
   sheetSuggestionKeyboard,
@@ -80,6 +101,8 @@ export interface BotDeps {
   settings: SettingsRepository;
   /** De dónde leen /validar y los reportes: la hoja (real o simulada) o el .xlsx del cuadre. */
   cuadre: CuadreReader;
+  /** Historial de /gasto (hoja "Gastos"); nunca escribe en el cuadre. */
+  expenses: ExpenseLog;
   timezone: string;
   /** Descarga de archivos; por defecto, la API de Telegram. */
   downloadFile?: FileDownloader;
@@ -214,6 +237,7 @@ const FLOW_CALLBACK_COMMAND: Readonly<Record<string, string>> = {
   [CALLBACK.IPV_SHEET]: '/ipv',
   // Elegir producto completa /fila o /producto: exige el mismo permiso.
   [CALLBACK.PRODUCT]: '/producto',
+  [CALLBACK.EXPENSE]: '/gasto',
 };
 
 /**
@@ -305,6 +329,8 @@ const FLOW_STEP = {
   ROW_DAY: 'row_day',
   /** 💱 TC: espera el número. */
   TC: 'tc',
+  /** ➕ Gasto: el paso concreto va en `expense.step`. */
+  EXPENSE: 'expense',
 } as const;
 
 type FlowStep = (typeof FLOW_STEP)[keyof typeof FLOW_STEP];
@@ -315,6 +341,8 @@ interface GuidedFlow {
   command: string;
   /** Producto elegido en 📄 Fila. */
   product?: string;
+  /** Borrador de ➕ Gasto. */
+  expense?: ExpenseDraft;
 }
 
 export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotContext> {
@@ -635,6 +663,67 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
     await showPrepared(ctx, await prepareSetTc(deps.pipeline, actorOf(ctx), { tab, tc }));
   }
 
+  // ------------------------------------------------------------ ➕ Gasto
+  const today = () => todayDateIn(clock(), deps.timezone);
+
+  /** Guarda el borrador y hace la pregunta de su paso. */
+  async function askExpense(ctx: BotContext, draft: ExpenseDraft): Promise<void> {
+    flows.set(String(actorOf(ctx).telegramId), {
+      step: FLOW_STEP.EXPENSE,
+      command: 'gasto',
+      expense: draft,
+    });
+    switch (draft.step) {
+      case EXPENSE_STEP.DATE:
+        await ctx.reply(datePrompt(draft), { reply_markup: expenseDateKeyboard() });
+        return;
+      case EXPENSE_STEP.DATE_TEXT:
+        await ctx.reply(EXPENSE_TEXT.ASK_DATE_TEXT);
+        return;
+      case EXPENSE_STEP.AMOUNT:
+        await ctx.reply(EXPENSE_TEXT.ASK_AMOUNT);
+        return;
+      case EXPENSE_STEP.CURRENCY:
+        await ctx.reply(EXPENSE_TEXT.ASK_CURRENCY, { reply_markup: expenseCurrencyKeyboard() });
+        return;
+      case EXPENSE_STEP.DESCRIPTION:
+        await ctx.reply(EXPENSE_TEXT.ASK_DESCRIPTION);
+        return;
+      case EXPENSE_STEP.CONFIRM: {
+        const expense = completeExpense(draft);
+        if (expense === null) throw new Error('Borrador de gasto incompleto en la vista previa.');
+        await ctx.reply(expensePreview(expense), { reply_markup: expenseConfirmKeyboard() });
+        return;
+      }
+    }
+  }
+
+  /** Borrador de ➕ Gasto del usuario, si está en el paso esperado. */
+  function expenseDraft(ctx: BotContext, step?: ExpenseDraft['step']): ExpenseDraft | undefined {
+    const draft = flows.get(String(actorOf(ctx).telegramId))?.expense;
+    if (draft === undefined || (step !== undefined && draft.step !== step)) return undefined;
+    return draft;
+  }
+
+  async function confirmExpense(ctx: BotContext): Promise<void> {
+    const key = String(actorOf(ctx).telegramId);
+    const draft = expenseDraft(ctx, EXPENSE_STEP.CONFIRM);
+    const expense = draft === undefined ? null : completeExpense(draft);
+    if (draft === undefined || expense === null) {
+      await ctx.reply(BOT_TEXT.FLOW_EXPIRED);
+      return;
+    }
+    // Se suelta antes de escribir: un segundo ✅ no agrega la fila dos veces.
+    flows.delete(key);
+    const result = await withTyping(ctx, () => recordExpense(deps.expenses, expense));
+    if (result.status === RECORD_STATUS.FAILED) {
+      flows.set(key, { step: FLOW_STEP.EXPENSE, command: 'gasto', expense: draft });
+    } else {
+      await removeKeyboard(ctx);
+    }
+    await ctx.reply(result.message);
+  }
+
   async function cancel(ctx: BotContext): Promise<void> {
     const key = String(actorOf(ctx).telegramId);
     const hadReason = awaitingReason.get(key) !== undefined;
@@ -667,6 +756,9 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
       case 'tc':
         await setTc(ctx, args);
         return;
+      case 'gasto':
+        await askExpense(ctx, startExpense(today()));
+        return;
       case 'deshacer':
         await showPrepared(ctx, prepareUndo(deps.pipeline, actorOf(ctx)));
         return;
@@ -689,6 +781,7 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
     'ipv',
     'validar',
     'tc',
+    'gasto',
     'deshacer',
     'cancelar',
     ...Object.keys(reports),
@@ -714,6 +807,9 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
       case BUTTON_FLOW.ASK_TC:
         flows.set(key, { step: FLOW_STEP.TC, command: button.command });
         await ctx.reply(BOT_TEXT.ASK_TC_VALUE);
+        return;
+      case BUTTON_FLOW.ASK_EXPENSE:
+        await askExpense(ctx, startExpense(today()));
         return;
       case BUTTON_FLOW.ASK_PRODUCT:
         flows.set(key, { step: FLOW_STEP.PRODUCT, command: button.command });
@@ -774,6 +870,20 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
         }
         flows.delete(key);
         await setTc(ctx, String(tc));
+        return;
+      }
+      case FLOW_STEP.EXPENSE: {
+        if (flow.expense === undefined) {
+          flows.delete(key);
+          await ctx.reply(BOT_TEXT.FLOW_EXPIRED);
+          return;
+        }
+        const result = answerExpense(flow.expense, answer, today());
+        if (result.error !== undefined) {
+          await ctx.reply(result.error);
+          return;
+        }
+        await askExpense(ctx, result.draft);
         return;
       }
     }
@@ -893,6 +1003,42 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
     await ctx.answerCallbackQuery();
     await removeKeyboard(ctx);
     await runCommand(ctx, 'top', ctx.match[1] ?? '');
+  });
+
+  // ➕ Gasto: [Hoy] / [Otro día], moneda, ✅ / ❌.
+  bot.callbackQuery(new RegExp(`^${CALLBACK.EXPENSE}:(\\w+)(?::(\\w+))?$`), async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const action = ctx.match[1] ?? '';
+    switch (action) {
+      case EXPENSE_ACTION.TODAY:
+      case EXPENSE_ACTION.OTHER_DAY: {
+        const draft = expenseDraft(ctx, EXPENSE_STEP.DATE);
+        if (draft === undefined) break;
+        await removeKeyboard(ctx);
+        await askExpense(
+          ctx,
+          action === EXPENSE_ACTION.TODAY ? chooseToday(draft, today()) : chooseOtherDay(draft),
+        );
+        return;
+      }
+      case EXPENSE_ACTION.CURRENCY: {
+        const draft = expenseDraft(ctx, EXPENSE_STEP.CURRENCY);
+        const currency = parseExpenseCurrency(ctx.match[2] ?? '');
+        if (draft === undefined || currency === null) break;
+        await removeKeyboard(ctx);
+        await askExpense(ctx, chooseCurrency(draft, currency));
+        return;
+      }
+      case EXPENSE_ACTION.CONFIRM:
+        await confirmExpense(ctx);
+        return;
+      case EXPENSE_ACTION.CANCEL:
+        if (expenseDraft(ctx) !== undefined) flows.delete(String(actorOf(ctx).telegramId));
+        await removeKeyboard(ctx);
+        await ctx.reply(EXPENSE_TEXT.CANCELLED);
+        return;
+    }
+    await ctx.reply(BOT_TEXT.FLOW_EXPIRED);
   });
 
   // Menú en línea de versiones anteriores: sigue funcionando desde el historial del chat.

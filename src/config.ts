@@ -39,6 +39,7 @@ const envSchema = z.object({
   DRIVE_IPV_FOLDER_ID: optionalString,
   CUADRE_SHEET_ID: optionalString,
   CUADRE_SEED_PATH: optionalString,
+  GASTOS_SPREADSHEET_ID: optionalString,
   DB_PATH: z.string().default('./data/kilo12.db'),
   TZ: z.string().default('America/Havana'),
 });
@@ -52,10 +53,14 @@ export interface Config {
   cuadreSheetId: string | undefined;
   /** Cuadre exportado (.xlsx) para la carga inicial del catálogo si la base está vacía. */
   cuadreSeedPath: string | undefined;
+  /** Hoja "Gastos": historial de gastos que llena /gasto. */
+  expensesSheetId: string | undefined;
   dbPath: string;
   timezone: string;
   /** Sin service account o sin hoja de cuadre, el bot usa una hoja simulada en memoria. */
   useFakeSheets: boolean;
+  /** Sin service account o sin hoja de gastos, /gasto guarda en memoria y lo avisa. */
+  useFakeExpenses: boolean;
 }
 
 export function loadConfig(env: Record<string, string | undefined> = process.env): Config {
@@ -76,8 +81,11 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     driveIpvFolderId: parsed.DRIVE_IPV_FOLDER_ID,
     cuadreSheetId: parsed.CUADRE_SHEET_ID,
     cuadreSeedPath: parsed.CUADRE_SEED_PATH,
+    expensesSheetId: parsed.GASTOS_SPREADSHEET_ID,
     dbPath: parsed.DB_PATH,
     timezone: parsed.TZ,
     useFakeSheets: parsed.GOOGLE_SA_JSON === undefined || parsed.CUADRE_SHEET_ID === undefined,
+    useFakeExpenses:
+      parsed.GOOGLE_SA_JSON === undefined || parsed.GASTOS_SPREADSHEET_ID === undefined,
   };
 }
