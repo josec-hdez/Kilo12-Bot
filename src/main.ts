@@ -22,7 +22,9 @@ import { SqliteSettingsRepository } from './adapters/sqlite/settings-repo.js';
 import { SqliteAccessLogRepository, SqliteUserRepository } from './adapters/sqlite/users-repo.js';
 import { createBot } from './adapters/telegram/bot.js';
 import { syncCommandMenus } from './adapters/telegram/command-menu.js';
+import { telegramReleaseNotifier } from './adapters/telegram/release-notifier.js';
 import { asCuadreReader, CuadreXlsxReader } from './adapters/xlsx/cuadre-xlsx-reader.js';
+import { ANNOUNCE_STATUS, announceRelease } from './app/announce-release.js';
 import { CachedCuadreReader } from './app/cached-cuadre-reader.js';
 import { initialCuadreSeed, seedAll } from './app/seed.js';
 import { openSeedFile } from './app/seed-file.js';
@@ -40,6 +42,8 @@ import type { SheetsGateway } from './ports/sheets-gateway.js';
 const FATAL_EXIT_CODE = 0;
 /** Reintentos de conexión inicial a Telegram (red caída al arrancar). */
 const START_RETRY_MS = [5_000, 15_000, 30_000, 60_000];
+/** Pausa entre avisos de versión nueva (Telegram admite ~30 mensajes por segundo). */
+const ANNOUNCE_PAUSE_MS = 100;
 
 function createSheetsGateway({ googleServiceAccountJson, cuadreSheetId }: Config): SheetsGateway {
   if (googleServiceAccountJson === undefined || cuadreSheetId === undefined) {
@@ -150,6 +154,29 @@ async function main(): Promise<void> {
     );
   } catch (error) {
     console.warn('No pude publicar el menú de comandos:', error);
+  }
+
+  // Versión nueva: aviso a todos los autorizados con su teclado. Un fallo no frena el arranque.
+  try {
+    const announce = await announceRelease(
+      {
+        users,
+        settings,
+        notify: telegramReleaseNotifier(bot.api),
+        pause: async () => {
+          await sleep(ANNOUNCE_PAUSE_MS);
+        },
+      },
+      config.release,
+    );
+    if (announce.status === ANNOUNCE_STATUS.ANNOUNCED) {
+      console.log(
+        `Aviso de versión ${config.release?.version ?? ''}: ${String(announce.ok)} enviados` +
+          (announce.failed === 0 ? '.' : `, ${String(announce.failed)} con error (ver avisos).`),
+      );
+    }
+  } catch (error) {
+    console.warn('No pude avisar la versión nueva:', error);
   }
 
   for (let attempt = 0; ; attempt++) {

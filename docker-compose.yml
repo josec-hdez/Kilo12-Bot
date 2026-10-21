@@ -1,6 +1,11 @@
 services:
   bot:
-    build: .
+    build:
+      context: .
+      # Los exporta scripts/deploy.sh; sin el script quedan vacíos y no se avisa versión.
+      args:
+        APP_VERSION: ${APP_VERSION:-}
+        RELEASE_NOTES: ${RELEASE_NOTES:-}
     # Solo reinicia si el proceso falla (código ≠ 0). Un token o una configuración
     # inválidos terminan con código 0 y no entran en un bucle de reinicios.
     restart: on-failure

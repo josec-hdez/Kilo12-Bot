@@ -14,6 +14,10 @@ RUN npm run build && npm prune --omit=dev
 # Etapa final: solo lo necesario para ejecutar el bot.
 FROM node:22-bookworm-slim
 ENV NODE_ENV=production
+# Versión y notas que fija scripts/deploy.sh. Vacías (build sin el script): no hay aviso.
+ARG APP_VERSION=
+ARG RELEASE_NOTES=
+ENV APP_VERSION=$APP_VERSION RELEASE_NOTES=$RELEASE_NOTES
 WORKDIR /app
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
