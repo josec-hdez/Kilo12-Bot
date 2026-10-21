@@ -42,6 +42,17 @@ describe('loadConfig', () => {
     expect(config.useFakeSheets).toBe(true);
   });
 
+  it('lee la versión y las notas fijadas al construir la imagen', () => {
+    expect(loadConfig(BASE_ENV).release).toBeNull();
+    expect(loadConfig({ ...BASE_ENV, APP_VERSION: '  ' }).release).toBeNull();
+    const config = loadConfig({
+      ...BASE_ENV,
+      APP_VERSION: 'a53ccff',
+      RELEASE_NOTES: 'feat: uno\\nfix: dos',
+    });
+    expect(config.release).toEqual({ version: 'a53ccff', notes: ['feat: uno', 'fix: dos'] });
+  });
+
   it('lanza un error claro si falta el token', () => {
     expect(() => loadConfig({ OWNER_IDS: '1' })).toThrow(ConfigError);
     expect(() => loadConfig({ OWNER_IDS: '1' })).toThrow(/TELEGRAM_TOKEN/);
