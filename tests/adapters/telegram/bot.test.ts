@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FakeSheetsGateway } from '../../../src/adapters/sheets/fake-sheets-gateway.js';
+import { MemoryExpenseLog } from '../../../src/adapters/sheets/memory-expense-log.js';
 import { SqliteCatalogRepository } from '../../../src/adapters/sqlite/catalog-repo.js';
 import { openDatabase } from '../../../src/adapters/sqlite/db.js';
 import {
@@ -76,6 +77,9 @@ let edited: number[];
 let cuadreError: Error | null;
 let chatActions: string[];
 let menuCalls: MenuCall[];
+let expenses: MemoryExpenseLog;
+/** Si no es null, la hoja Gastos falla con este error. */
+let expensesError: Error | null;
 let changeLog: SqliteChangeLogRepository;
 let accessLog: SqliteAccessLogRepository;
 let bot: ReturnType<typeof createBot>;
@@ -122,6 +126,8 @@ beforeEach(async () => {
   chatActions = [];
   menuCalls = [];
   cuadreError = null;
+  expenses = new MemoryExpenseLog();
+  expensesError = null;
   const reader = asCuadreReader(cuadre);
   const guard = <T>(read: () => Promise<T>) =>
     cuadreError === null ? read() : Promise.reject(cuadreError);
@@ -143,6 +149,10 @@ beforeEach(async () => {
         listDays: () => guard(() => reader.listDays()),
         readDay: (tab) => guard(() => reader.readDay(tab)),
         readDays: (tabs) => guard(() => reader.readDays(tabs)),
+      },
+      expenses: {
+        append: (expense) =>
+          expensesError === null ? expenses.append(expense) : Promise.reject(expensesError),
       },
       timezone: 'America/Havana',
       downloadFile: () => Promise.resolve(ipvBuffer),
@@ -572,7 +582,7 @@ describe('/validar, /ayuda y texto libre', () => {
     await text(CLERK, '/ayuda');
     expect(last().text).toContain('/ipv');
     expect(last().text).not.toContain('/validar');
-    expect(last().keys).toEqual([['📥 IPV', '❓ Ayuda']]);
+    expect(last().keys).toEqual([['📥 IPV', '➕ Gasto', '❓ Ayuda']]);
     expect(last().persistent).toBe(true);
   });
 
@@ -829,5 +839,151 @@ describe('utilidades', () => {
     expect(parseTcValue('780,5')).toBe(780.5);
     expect(parseTcValue('1,050')).toBe(1050);
     expect(parseTcValue('x')).toBeNull();
+  });
+});
+
+describe('➕ Gasto (historial en la hoja Gastos)', () => {
+  it('flujo completo con la fecha de hoy: agrega una fila y no toca el cuadre', async () => {
+    await text(OWNER, '➕ Gasto');
+    expect(last().text).toContain('🗓 Fecha: hoy, 03/10/2026');
+    expect(last().buttons).toEqual(['gx:today', 'gx:other']);
+
+    await click(OWNER, 'gx:today');
+    expect(last().text).toContain('¿Cuánto fue?');
+    await text(OWNER, '1,500');
+    expect(last().text).toBe('💱 ¿En qué moneda?');
+    expect(last().buttons).toEqual(['gx:cur:CUP', 'gx:cur:USD']);
+    await click(OWNER, 'gx:cur:CUP');
+    expect(last().text).toContain('¿En qué se gastó?');
+    await text(OWNER, 'transporte de mercancía');
+
+    expect(last().text).toContain('Fecha: 03/10/2026');
+    expect(last().text).toContain('Cantidad: 1,500 CUP');
+    expect(last().text).toContain('Descripción: transporte de mercancía');
+    expect(last().text).toContain('el cuadre no cambia');
+    expect(last().buttons).toEqual(['gx:ok', 'gx:no']);
+    expect(expenses.expenses).toEqual([]);
+
+    await click(OWNER, 'gx:ok');
+    expect(last().text).toBe(
+      '✅ Gasto registrado en la hoja Gastos: 03/10/2026 · 1,500 CUP · transporte de mercancía.',
+    );
+    expect(expenses.expenses).toEqual([
+      {
+        date: { year: 2026, month: 10, day: 3 },
+        amount: 1500,
+        currency: 'CUP',
+        description: 'transporte de mercancía',
+      },
+    ]);
+    expect(await tabs()).toEqual([]);
+  });
+
+  it('[Otro día] pide la fecha escrita; rechaza fechas futuras o inválidas', async () => {
+    await text(OWNER, '/gasto');
+    await click(OWNER, 'gx:other');
+    expect(last().text).toContain('Escribe la fecha del gasto');
+    await text(OWNER, '05/10');
+    expect(last().text).toContain('posterior a hoy');
+    await text(OWNER, '31/02');
+    expect(last().text).toContain('No entiendo esa fecha');
+    await text(OWNER, '01/10');
+    expect(last().text).toContain('¿Cuánto fue?');
+    await text(OWNER, '20');
+    await text(OWNER, 'usd');
+    await text(OWNER, 'hielo');
+    await click(OWNER, 'gx:ok');
+    expect(expenses.expenses[0]).toMatchObject({
+      date: { year: 2026, month: 10, day: 1 },
+      amount: 20,
+      currency: 'USD',
+    });
+  });
+
+  it('la fecha también se puede escribir sin tocar [Otro día]', async () => {
+    await text(OWNER, '/gasto');
+    await text(OWNER, '2/10/2026');
+    expect(last().text).toContain('¿Cuánto fue?');
+  });
+
+  it('valida la cantidad y la moneda sin perder el borrador', async () => {
+    await text(OWNER, '/gasto');
+    await click(OWNER, 'gx:today');
+    await text(OWNER, 'mil');
+    expect(last().text).toContain('número mayor que 0');
+    await text(OWNER, '0');
+    expect(last().text).toContain('número mayor que 0');
+    await text(OWNER, '250');
+    await text(OWNER, 'euros');
+    expect(last().text).toContain('Elige CUP o USD');
+    await click(OWNER, 'gx:cur:USD');
+    expect(last().text).toContain('¿En qué se gastó?');
+  });
+
+  it('❌ Cancelar y /cancelar no registran nada', async () => {
+    await text(OWNER, '/gasto');
+    await click(OWNER, 'gx:today');
+    await text(OWNER, '100');
+    await click(OWNER, 'gx:cur:CUP');
+    await text(OWNER, 'bolsas');
+    await click(OWNER, 'gx:no');
+    expect(last().text).toBe('Listo, no se registró el gasto.');
+
+    await text(OWNER, '/gasto');
+    await text(OWNER, '/cancelar');
+    expect(last().text).toBe(BOT_TEXT.FLOW_CANCELLED);
+    await click(OWNER, 'gx:today');
+    expect(last().text).toBe(BOT_TEXT.FLOW_EXPIRED);
+    expect(expenses.expenses).toEqual([]);
+  });
+
+  it('si la hoja falla, avisa y ✅ se puede tocar otra vez; un ✅ repetido no duplica', async () => {
+    await text(OWNER, '/gasto');
+    await click(OWNER, 'gx:today');
+    await text(OWNER, '100');
+    await click(OWNER, 'gx:cur:CUP');
+    await text(OWNER, 'bolsas');
+    expensesError = new Error('403');
+    await click(OWNER, 'gx:ok');
+    expect(last().text).toContain('⚠️ No pude escribir en la hoja Gastos (403)');
+    expensesError = null;
+    await click(OWNER, 'gx:ok');
+    expect(last().text).toContain('✅ Gasto registrado');
+    await click(OWNER, 'gx:ok');
+    expect(last().text).toBe(BOT_TEXT.FLOW_EXPIRED);
+    expect(expenses.expenses).toHaveLength(1);
+  });
+
+  it('el dependiente y el socio pueden registrar gastos', async () => {
+    for (const user of [CLERK, PARTNER]) {
+      await text(user, '➕ Gasto');
+      await click(user, 'gx:today');
+      await text(user, '50');
+      await click(user, 'gx:cur:CUP');
+      await text(user, 'agua');
+      await click(user, 'gx:ok');
+      expect(last().text).toContain('✅ Gasto registrado');
+    }
+    expect(expenses.expenses).toHaveLength(2);
+  });
+
+  it('un usuario fuera de la whitelist no puede', async () => {
+    await text(STRANGER, '/gasto');
+    expect(last().text).toBe('No autorizado.');
+    await click(STRANGER, 'gx:ok');
+    expect(answers.at(-1)?.text).toBe('No autorizado.');
+    expect(expenses.expenses).toEqual([]);
+  });
+
+  it('el borrador es de quien lo empezó', async () => {
+    await text(OWNER, '/gasto');
+    await click(PARTNER, 'gx:today');
+    expect(last().text).toBe(BOT_TEXT.FLOW_EXPIRED);
+  });
+
+  it('📊 Gastos sigue siendo el reporte del cuadre', async () => {
+    await text(OWNER, '📊 Gastos');
+    expect(sent.some((m) => m.text.includes('No hay gastos registrados'))).toBe(true);
+    expect(expenses.expenses).toEqual([]);
   });
 });
