@@ -28,6 +28,7 @@ describe('ayuda por rol', () => {
       'deshacer',
       'cuadremes',
       'cierremes',
+      'equivalencia',
       ...REPORTS,
       'ayuda',
     ]);
