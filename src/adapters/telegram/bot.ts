@@ -21,6 +21,7 @@ import {
   prepareAddAlias,
   prepareRemoveAlias,
   saveIpvAlias,
+  saveNewProduct,
   type AliasChange,
   type EquivalenceDeps,
 } from '../../app/manage-equivalences.js';
@@ -1396,7 +1397,7 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
     }
     if (answer === IPV_ALIAS_ACTION.NEW) {
       review.skipped.push(question.ipvProduct);
-      await ctx.reply(`🆕 «${question.ipvProduct}» queda como producto nuevo.`);
+      await ctx.reply(saveNewProduct(equivalenceDeps(), actor.telegramId, question.ipvProduct));
     } else {
       const product = question.candidates[Number(answer)];
       if (product === undefined) {

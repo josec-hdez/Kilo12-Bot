@@ -260,6 +260,18 @@ export function applyAliasChange(
     : `✅ «${change.alias}» pasó de ${current} a ${product}.`;
 }
 
+/**
+ * 🆕 Es nuevo en la vista previa de /ipv: el producto entra al catálogo con su nombre
+ * del IPV, así que ya no queda "sin equivalencia" ni se vuelve a preguntar.
+ */
+export function saveNewProduct(deps: EquivalenceDeps, telegramId: number, name: string): string {
+  const existing = deps.catalog.findProduct(name);
+  if (existing !== undefined) return `«${existing.name}» ya estaba en el catálogo.`;
+  const product = deps.catalog.ensureProduct(name.trim());
+  deps.changeLog.record({ telegramId, action: 'add_product', target: product.name, detail: null });
+  return `🆕 «${product.name}» queda como producto nuevo.`;
+}
+
 /** Elección en la vista previa de /ipv: el producto del IPV es este del cuadre. */
 export function saveIpvAlias(
   deps: EquivalenceDeps,
