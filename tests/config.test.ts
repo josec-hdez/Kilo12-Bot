@@ -19,6 +19,15 @@ describe('loadConfig', () => {
     expect(config.cuadreSeedPath).toBeUndefined();
   });
 
+  it('el libro de CUADRE_SHEET_ID es de octubre de 2026 salvo que se indique otro mes', () => {
+    expect(loadConfig(BASE_ENV).cuadreSheetMonth).toBe('2026-10');
+    expect(loadConfig({ ...BASE_ENV, CUADRE_SHEET_MONTH: '' }).cuadreSheetMonth).toBe('2026-10');
+    expect(loadConfig({ ...BASE_ENV, CUADRE_SHEET_MONTH: '2026-11' }).cuadreSheetMonth).toBe(
+      '2026-11',
+    );
+    expect(() => loadConfig({ ...BASE_ENV, CUADRE_SHEET_MONTH: 'nov' })).toThrow(ConfigError);
+  });
+
   it('trata las variables vacías como ausentes', () => {
     const config = loadConfig({ ...BASE_ENV, GOOGLE_SA_JSON: '', CUADRE_SHEET_ID: '' });
 

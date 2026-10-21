@@ -23,9 +23,11 @@ import {
   splitMessage,
 } from '../../../src/adapters/telegram/bot.js';
 import { asCuadreReader, CuadreXlsxReader } from '../../../src/adapters/xlsx/cuadre-xlsx-reader.js';
+import { readBookRegistry, singleBook } from '../../../src/app/cuadre-books.js';
 import { FREE_TEXT_REPLY } from '../../../src/app/help.js';
 import { keyboardRowsFor, menuCommandsFor } from '../../../src/app/keyboard-menu.js';
 import { MAX_TABLE_WIDTH, preLines } from '../../../src/app/report-format.js';
+import { isMonthClosed } from '../../../src/app/closed-months.js';
 import { initialCuadreSeed, seedAll } from '../../../src/app/seed.js';
 import { ROLE } from '../../../src/core/auth.js';
 import { EQUIVALENCES } from '../../../src/core/equivalences.js';
@@ -92,6 +94,9 @@ let changeLog: SqliteChangeLogRepository;
 let accessLog: SqliteAccessLogRepository;
 let bot: ReturnType<typeof createBot>;
 let updateId: number;
+let settingsRepo: SqliteSettingsRepository;
+/** Pestañas de las hojas que /cuadremes puede abrir (ID → pestañas). */
+let bookTabs: Record<string, string[]>;
 
 function keysOf(payload: Record<string, unknown>): { keys: string[][]; persistent: boolean } {
   const markup = payload.reply_markup as
@@ -118,6 +123,8 @@ beforeEach(async () => {
   const catalog = new SqliteCatalogRepository(db);
   const users = new SqliteUserRepository(db);
   const settings = new SqliteSettingsRepository(db);
+  settingsRepo = settings;
+  bookTabs = {};
   seedAll(
     { users, catalog, settings },
     { ownerIds: [OWNER], equivalences: EQUIVALENCES, cuadre: initialCuadreSeed(catalog, cuadre) },
@@ -151,9 +158,9 @@ beforeEach(async () => {
   bot = createBot(
     {
       pipeline: {
-        sheets,
+        books: singleBook(sheets, guardedCuadre),
+        settings,
         catalog,
-        cuadre: guardedCuadre,
         pending: new SqlitePendingActionRepository(db, clock),
         changeLog,
         snapshots: new SqliteSnapshotRepository(db, clock),
@@ -165,6 +172,15 @@ beforeEach(async () => {
       expenses: {
         append: (expense) =>
           expensesError === null ? expenses.append(expense) : Promise.reject(expensesError),
+      },
+      books: {
+        inspect: (id) => {
+          const found = bookTabs[id];
+          return found === undefined
+            ? Promise.reject(new Error('The caller does not have permission'))
+            : Promise.resolve(found);
+        },
+        serviceAccountEmail: 'kilo12bot@test.iam.gserviceaccount.com',
       },
       timezone: 'America/Havana',
       downloadFile: () => Promise.resolve(ipvBuffer),
@@ -1010,5 +1026,81 @@ describe('➕ Gasto (historial en la hoja Gastos)', () => {
     await text(OWNER, '📊 Gastos');
     expect(sent.some((m) => m.text.includes('No hay gastos registrados'))).toBe(true);
     expect(expenses.expenses).toEqual([]);
+  });
+});
+
+describe('📒 /cuadremes (libro de cuadre por mes)', () => {
+  const NOV_ID = '1NovNovNovNovNovNovNovNovNovNovNovNov';
+  const link = `https://docs.google.com/spreadsheets/d/${NOV_ID}/edit`;
+
+  it('solo las dueñas pueden registrar libros', async () => {
+    await text(CLERK, `/cuadremes 2026-11 ${link}`);
+    expect(last().text).toContain('Tu rol no permite');
+  });
+
+  it('sin datos lista los libros registrados', async () => {
+    await text(OWNER, '/cuadremes');
+    expect(last().text).toContain('Libros de cuadre registrados');
+  });
+
+  it('revisa la hoja, pide ✅ y registra el libro', async () => {
+    bookTabs[NOV_ID] = ['_plantilla'];
+    await text(OWNER, `/cuadremes 2026-11 ${link}`);
+    expect(last().text).toContain('Libro de cuadre de noviembre 2026');
+    expect(readBookRegistry(settingsRepo)['2026-11']).toBeUndefined();
+    await click(OWNER, button('cm').replace(/:.*/, ':ok'));
+    expect(last().text).toContain('✅ Libro de noviembre 2026 registrado');
+    expect(readBookRegistry(settingsRepo)['2026-11']).toBe(NOV_ID);
+  });
+
+  it('❌ Cancelar no registra nada', async () => {
+    bookTabs[NOV_ID] = ['_plantilla'];
+    await text(OWNER, `/cuadremes 2026-11 ${link}`);
+    await click(OWNER, 'cm:no');
+    expect(last().text).toBe('Listo, cancelado.');
+    expect(readBookRegistry(settingsRepo)['2026-11']).toBeUndefined();
+  });
+
+  it('sin acceso a la hoja dice con qué cuenta compartirla', async () => {
+    await text(OWNER, `/cuadremes 2026-11 ${link}`);
+    expect(last().text).toContain('kilo12bot@test.iam.gserviceaccount.com');
+    expect(last().buttons).toEqual([]);
+  });
+});
+
+describe('🔒 /cierremes (revisar y cerrar el mes)', () => {
+  it('solo las dueñas pueden cerrar un mes', async () => {
+    await text(CLERK, '/cierremes 2026-10');
+    expect(last().text).toContain('Tu rol no permite');
+  });
+
+  it('muestra la revisión y 🔒 Cerrar mes lo marca cerrado; reabrir lo abre', async () => {
+    await text(OWNER, '/cierremes 2026-10');
+    const review = sent.map((m) => m.text).join('\n');
+    expect(review).toContain('Cierre de octubre 2026');
+    expect(review).toContain('Sugerencias');
+    expect(last().parseMode).toBe('HTML');
+    expect(last().buttons).toEqual(['cx:ok', 'cx:no']);
+    expect(isMonthClosed(settingsRepo, '2026-10')).toBe(false);
+
+    await click(OWNER, 'cx:ok');
+    expect(last().text).toContain('octubre 2026 cerrado');
+    expect(isMonthClosed(settingsRepo, '2026-10')).toBe(true);
+
+    await text(OWNER, '/cierremes 2026-10 reabrir');
+    expect(last().text).toContain('reabierto');
+    expect(isMonthClosed(settingsRepo, '2026-10')).toBe(false);
+  });
+
+  it('❌ No cerrar deja el mes abierto', async () => {
+    await text(OWNER, '/cierremes 2026-10');
+    await click(OWNER, 'cx:no');
+    expect(last().text).toBe('octubre 2026 sigue abierto.');
+    expect(isMonthClosed(settingsRepo, '2026-10')).toBe(false);
+  });
+
+  it('un mes inválido explica el uso', async () => {
+    await text(OWNER, '/cierremes octubre');
+    expect(last().text).toContain('Uso: /cierremes');
   });
 });
