@@ -28,6 +28,7 @@ import { MAX_TABLE_WIDTH, preLines } from '../../../src/app/report-format.js';
 import { initialCuadreSeed, seedAll } from '../../../src/app/seed.js';
 import { ROLE } from '../../../src/core/auth.js';
 import { EQUIVALENCES } from '../../../src/core/equivalences.js';
+import type { CuadreReader } from '../../../src/ports/cuadre-source.js';
 import { RENDER } from '../../../src/ports/sheets-gateway.js';
 
 const fixture = (name: string) => fileURLToPath(new URL(`../../fixtures/${name}`, import.meta.url));
@@ -135,11 +136,18 @@ beforeEach(async () => {
     cuadreError === null ? read() : Promise.reject(cuadreError);
   updateId = 1;
 
+  const guardedCuadre: CuadreReader = {
+    listDays: () => guard(() => reader.listDays()),
+    readDay: (tab) => guard(() => reader.readDay(tab)),
+    readDays: (tabs) => guard(() => reader.readDays(tabs)),
+  };
+
   bot = createBot(
     {
       pipeline: {
         sheets,
         catalog,
+        cuadre: guardedCuadre,
         pending: new SqlitePendingActionRepository(db, clock),
         changeLog,
         snapshots: new SqliteSnapshotRepository(db, clock),
@@ -147,11 +155,7 @@ beforeEach(async () => {
       },
       auth: { users, accessLog },
       settings,
-      cuadre: {
-        listDays: () => guard(() => reader.listDays()),
-        readDay: (tab) => guard(() => reader.readDay(tab)),
-        readDays: (tabs) => guard(() => reader.readDays(tabs)),
-      },
+      cuadre: guardedCuadre,
       timezone: 'America/Havana',
       downloadFile: () => Promise.resolve(ipvBuffer),
     },

@@ -10,10 +10,11 @@ import {
 import { SqlitePendingActionRepository } from '../../src/adapters/sqlite/pending-actions-repo.js';
 import { SqliteSettingsRepository } from '../../src/adapters/sqlite/settings-repo.js';
 import { SqliteUserRepository } from '../../src/adapters/sqlite/users-repo.js';
-import { CuadreXlsxReader } from '../../src/adapters/xlsx/cuadre-xlsx-reader.js';
+import { asCuadreReader, CuadreXlsxReader } from '../../src/adapters/xlsx/cuadre-xlsx-reader.js';
 import { ExcelIpvSource } from '../../src/adapters/xlsx/excel-ipv-source.js';
 import { cancelPending, confirmPending } from '../../src/app/confirm.js';
 import { dayTab, prepareIpvLoad } from '../../src/app/load-ipv.js';
+import type { LoadIpvPayload } from '../../src/app/pending-payloads.js';
 import {
   CONFIRM_STATUS,
   PREPARE_STATUS,
@@ -29,6 +30,7 @@ import { ROLE } from '../../src/core/auth.js';
 import { computeTotals, type TotalsRow } from '../../src/core/calc.js';
 import { EQUIVALENCES } from '../../src/core/equivalences.js';
 import type { IpvDay } from '../../src/core/types.js';
+import type { CuadreReader } from '../../src/ports/cuadre-source.js';
 import { RENDER, YELLOW, type CellValue } from '../../src/ports/sheets-gateway.js';
 
 const fixture = (name: string) => fileURLToPath(new URL(`../fixtures/${name}`, import.meta.url));
@@ -64,6 +66,7 @@ beforeEach(() => {
   deps = {
     sheets,
     catalog,
+    cuadre: asCuadreReader(cuadre),
     pending: new SqlitePendingActionRepository(db, clock),
     changeLog: new SqliteChangeLogRepository(db),
     snapshots: new SqliteSnapshotRepository(db, clock),
@@ -164,14 +167,57 @@ describe('/ipv del 3 oct, de punta a punta contra la hoja simulada', () => {
     expect(result).toMatchObject({ status: PREPARE_STATUS.REJECTED });
   });
 
-  it('sin catálogo no prepara nada', async () => {
+  it('sin catálogo ni días anteriores en el cuadre no prepara nada', async () => {
+    const empty = openDatabase(':memory:');
+    const noDays: CuadreReader = {
+      listDays: () => Promise.resolve([]),
+      readDay: () => Promise.reject(new Error('sin pestañas')),
+      readDays: () => Promise.resolve([]),
+    };
+    const result = await prepareIpvLoad(
+      { ...deps, catalog: new SqliteCatalogRepository(empty), cuadre: noDays },
+      OWNER,
+      { ipv: ipv3, tc: null },
+    );
+    expect(result).toMatchObject({ status: PREPARE_STATUS.REJECTED });
+  });
+
+  it('sin catálogo, toma los costos de los días anteriores del cuadre', async () => {
     const empty = openDatabase(':memory:');
     const result = await prepareIpvLoad(
       { ...deps, catalog: new SqliteCatalogRepository(empty) },
       OWNER,
       { ipv: ipv3, tc: null },
     );
-    expect(result).toMatchObject({ status: PREPARE_STATUS.REJECTED });
+    expect(result.status).toBe(PREPARE_STATUS.READY);
+  });
+
+  it('el costo sale del cuadre aunque el catálogo no lo tenga', async () => {
+    const [day2] = await asCuadreReader(cuadre).readDays(['02']);
+    const known = day2?.rows.find((row) => row.costo !== null && row.costo > 0);
+    if (known === undefined) throw new Error('la pestaña 02 debería tener costos');
+    deps.catalog.setCost({ product: known.product, cost: null, source: 'test', changedBy: null });
+
+    const { pendingId } = ready(await prepareIpvLoad(deps, OWNER, { ipv: ipv3, tc: null }));
+    const payload = deps.pending.get(pendingId)?.payload as LoadIpvPayload;
+    const row = payload.sheetValues.find((line) => line[0] === known.product);
+    expect(row?.[1]).toBe(known.costo);
+  });
+
+  it('si no puede leer el cuadre, no prepara la carga', async () => {
+    const failing: CuadreReader = {
+      listDays: () => Promise.reject(new Error('cuota agotada')),
+      readDay: () => Promise.reject(new Error('cuota agotada')),
+      readDays: () => Promise.reject(new Error('cuota agotada')),
+    };
+    const result = await prepareIpvLoad({ ...deps, cuadre: failing }, OWNER, {
+      ipv: ipv3,
+      tc: null,
+    });
+    expect(result).toMatchObject({
+      status: PREPARE_STATUS.REJECTED,
+      message: expect.stringContaining('No pude leer los costos del cuadre') as unknown,
+    });
   });
 
   it('el dependiente no ve la utilidad ni la lista de costos faltantes', async () => {

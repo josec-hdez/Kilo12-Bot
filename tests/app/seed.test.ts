@@ -144,6 +144,36 @@ describe('seedAll', () => {
     expect(deps.catalog.listProducts()).toEqual([]);
     expect(deps.users.list()).toHaveLength(2);
   });
+
+  it('con el catálogo ya cargado suma las equivalencias nuevas sin tocar costos', () => {
+    const db = openDatabase(':memory:');
+    const deps = {
+      users: new SqliteUserRepository(db),
+      catalog: new SqliteCatalogRepository(db),
+      settings: new SqliteSettingsRepository(db),
+    };
+    seedAll(deps, {
+      ownerIds: [10],
+      equivalences: [{ cuadre: 'mani', ipv: ['top mix peque'] }],
+      cuadre: { rows: rows05, source: 'seed:cuadre-05' },
+    });
+    const costBefore = deps.catalog.findProduct('mani')?.cost;
+
+    const summary = seedAll(deps, { ownerIds: [10], equivalences: EQUIVALENCES, cuadre: null });
+
+    expect(summary.catalog).toBeNull();
+    expect(summary.equivalences?.conflicts).toEqual([]);
+    expect(deps.catalog.findProduct('mani')?.aliases).toEqual(['top mix peque', 'top mix']);
+    expect(deps.catalog.findProduct('mani')?.cost).toBe(costBefore);
+    expect(deps.catalog.findProduct('azucar campofino')?.aliases).toEqual(['azucar']);
+
+    const again = seedAll(deps, { ownerIds: [10], equivalences: EQUIVALENCES, cuadre: null });
+    expect(again.equivalences).toMatchObject({
+      createdProducts: [],
+      addedAliases: 0,
+      conflicts: [],
+    });
+  });
 });
 
 describe('initialCuadreSeed', () => {
