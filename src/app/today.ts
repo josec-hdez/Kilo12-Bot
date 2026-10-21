@@ -19,3 +19,16 @@ export function todayDateIn(now: Date, timeZone: string): CalendarDate {
     Number(parts.find((part) => part.type === type)?.value);
   return { year: value('year'), month: value('month'), day: value('day') };
 }
+
+/** Minutos desde la medianoche de `now` en la zona horaria del negocio (09:30 → 570). */
+export function minutesIn(now: Date, timeZone: string): number {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    hour: 'numeric',
+    minute: 'numeric',
+    hourCycle: 'h23',
+  }).formatToParts(now);
+  const value = (type: 'hour' | 'minute') =>
+    Number(parts.find((part) => part.type === type)?.value);
+  return value('hour') * 60 + value('minute');
+}
