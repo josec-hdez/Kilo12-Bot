@@ -38,11 +38,18 @@ const CLERK = 30;
 const STRANGER = 99;
 
 let ipvBuffer: ArrayBuffer;
+let legacyBuffer: ArrayBuffer;
+let posBuffer: ArrayBuffer;
 let cuadre: CuadreXlsxReader;
 
+async function bufferOf(name: string): Promise<ArrayBuffer> {
+  const bytes = await readFile(fixture(name));
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+}
+
 beforeAll(async () => {
-  const bytes = await readFile(fixture('IPV KILO 12.xlsx'));
-  ipvBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  legacyBuffer = await bufferOf('IPV KILO 12.xlsx');
+  posBuffer = await bufferOf('IPV POS 2026-10-14.xlsx');
   cuadre = await CuadreXlsxReader.fromFile(fixture('Cuadre K12 Remoto.xlsx'));
 });
 
@@ -99,6 +106,7 @@ function buttonsOf(payload: Record<string, unknown>): string[] {
 }
 
 beforeEach(async () => {
+  ipvBuffer = legacyBuffer;
   now = new Date('2026-10-03T23:00:00Z'); // 19:00 del 3 oct en La Habana
   const clock = () => now;
   const db = openDatabase(':memory:');
@@ -313,6 +321,19 @@ describe('/ipv', () => {
     expect(last().text).toContain('✅ Pestaña 03 creada');
     expect(await tabs()).toContain('03');
     expect(edits).toBe(1);
+  });
+
+  it('IPV del POS: reconoce el día por el título, sin preguntar, y la venta cuadra', async () => {
+    ipvBuffer = posBuffer;
+    await document(OWNER, undefined, 'IPV 2026-10-14.xlsx');
+    expect(last().text).toContain('Hoja «Turno 18 10-14» → pestaña 14');
+    expect(last().text).toContain('Venta: 112,845.5 CUP');
+    expect(last().text).toContain('✅ igual al IMPORTE TOTAL del IPV');
+    expect(last().text).not.toContain('¿A qué día');
+
+    await click(OWNER, button('ok'));
+    expect(last().text).toContain('✅ Pestaña 14 creada');
+    expect(await tabs()).toContain('14');
   });
 
   it('acepta "/ipv 3oct" en el pie del archivo', async () => {
