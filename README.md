@@ -74,7 +74,7 @@ La pregunta es solo de quien envió el archivo, vence a los 15 minutos y se aban
 2. **Cantidad:** un número mayor que 0 (`1500`, `1,500`, `12.5`).
 3. **Moneda:** **[CUP]** o **[USD]**, o se escribe.
 4. **Descripción:** texto libre, hasta 200 caracteres.
-5. **Vista previa** con **✅ Confirmar** / **❌ Cancelar**. Al confirmar se agrega la fila debajo de la última.
+5. **Vista previa** con **✅ Confirmar** / **❌ Cancelar**. Al confirmar se escribe en la fila siguiente a la última que tiene **Fecha** (columnas A:D de la primera pestaña visible). Las columnas que agreguen a la derecha, como una casilla "Confirmado en cuadre", no se tocan ni cambian dónde cae el gasto.
 
 La fecha se escribe como fecha de Sheets y la cantidad como número. Si la hoja no responde, el bot lo dice, no registra nada y deja tocar ✅ otra vez. `/deshacer` no revierte un gasto: se corrige o se borra a mano en la hoja.
 

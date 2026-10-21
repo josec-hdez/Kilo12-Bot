@@ -1,7 +1,7 @@
 import { GrammyError, HttpError } from 'grammy';
 import { FakeSheetsGateway } from './adapters/sheets/fake-sheets-gateway.js';
 import {
-  createExpenseAppendClient,
+  createExpenseSheetClient,
   GoogleExpenseLog,
 } from './adapters/sheets/google-expense-log.js';
 import {
@@ -57,7 +57,7 @@ function createExpenseLog({ googleServiceAccountJson, expensesSheetId }: Config)
   if (googleServiceAccountJson === undefined || expensesSheetId === undefined) {
     return new MemoryExpenseLog();
   }
-  return new GoogleExpenseLog(createExpenseAppendClient(googleServiceAccountJson), expensesSheetId);
+  return new GoogleExpenseLog(createExpenseSheetClient(googleServiceAccountJson), expensesSheetId);
 }
 
 /**
