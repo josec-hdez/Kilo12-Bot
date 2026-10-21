@@ -63,7 +63,7 @@ El IPV y el cuadre usan nombres distintos. Mantén y usa esta tabla, y amplíala
 | arroz | arroz el rey |
 | atun | atun 190g |
 | bolsa de pan de 8 u | pan bolsa 8 unidades |
-| choco paye | panque choco paye |
+| choco paye | panque choco paye / panque chocopaye |
 | cuadrito de pollo | cuadro de pollo |
 | detergente kawhala | detergente khawla |
 | detergente en polvo | detergente en polvo STB |
@@ -75,13 +75,13 @@ El IPV y el cuadre usan nombres distintos. Mantén y usa esta tabla, y amplíala
 | jamonada | jamonada lb |
 | malta guajira chiquita | malta guajira 330ml |
 | malta guajira grande | malta guajira grande 1.5L |
-| mani | top mix peque |
+| mani | top mix peque / top mix |
 | mayonesa cepera | mayonesa |
 | panque kek | peter kek |
 | paye | panque paye |
 | papas mediterraneas | papitas verdes |
 | papas onduladas | papitas rojas |
-| papel sanitario | papel higienico |
+| papel sanitario | papel higienico / papel higienico paquete |
 | unidad de papel sanitario | papel higienico unidad |
 | pollo | pollo lb |
 | queso blanco | queso lb |
@@ -95,12 +95,21 @@ El IPV y el cuadre usan nombres distintos. Mantén y usa esta tabla, y amplíala
 | energizante 5 shot | energizante 5shots |
 | harina de trigo | harina de trigo 1kg |
 | jugo gusto pinneaple | jugo gusto pineapple |
-| ketchup | ketchup vima |
+| ketchup | ketchup vima / ketcup vima |
 | mayonesa holland park | mayonesa hollandpark |
 | pasta tomate | pasta de tomate |
 | refresco instantaneo | refresco instantaneo YEYA |
 | shaka piña colada | shaka piña colada 250ml |
 | zumo limon | zumo de limon |
+| azucar campofino | azucar |
+| espagueti yeya | espaguetti yeya |
+| jabas | jaba |
+| jugo sunchy | jugo lata sunchy |
+| compota manzana | compota de manzana |
+| picadillo cocinerito 400 g | picadillo cocinerito |
+| queso crema | queso crema vima |
+| sorbeto bauduco | sorbetos bauduco |
+| cigarro popular de bodega | caja popular bodega |
 
 **Regla:** un producto siempre conserva el mismo nombre en todas las hojas del cuadre. Nunca alternes, por ejemplo, "refresco dispensado" y "refresco reenvasado".
 
