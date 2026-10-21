@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { parseRelease, type ReleaseInfo } from './core/release.js';
 
 /** Error de configuración con un mensaje legible para quien despliega el bot. */
 export class ConfigError extends Error {
@@ -40,6 +41,8 @@ const envSchema = z.object({
   CUADRE_SHEET_ID: optionalString,
   CUADRE_SEED_PATH: optionalString,
   GASTOS_SPREADSHEET_ID: optionalString,
+  APP_VERSION: optionalString,
+  RELEASE_NOTES: optionalString,
   DB_PATH: z.string().default('./data/kilo12.db'),
   TZ: z.string().default('America/Havana'),
 });
@@ -57,6 +60,8 @@ export interface Config {
   expensesSheetId: string | undefined;
   dbPath: string;
   timezone: string;
+  /** Versión fijada al construir la imagen (scripts/deploy.sh); null en desarrollo. */
+  release: ReleaseInfo | null;
   /** Sin service account o sin hoja de cuadre, el bot usa una hoja simulada en memoria. */
   useFakeSheets: boolean;
   /** Sin service account o sin hoja de gastos, /gasto guarda en memoria y lo avisa. */
@@ -84,6 +89,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     expensesSheetId: parsed.GASTOS_SPREADSHEET_ID,
     dbPath: parsed.DB_PATH,
     timezone: parsed.TZ,
+    release: parseRelease(parsed.APP_VERSION, parsed.RELEASE_NOTES),
     useFakeSheets: parsed.GOOGLE_SA_JSON === undefined || parsed.CUADRE_SHEET_ID === undefined,
     useFakeExpenses:
       parsed.GOOGLE_SA_JSON === undefined || parsed.GASTOS_SPREADSHEET_ID === undefined,
