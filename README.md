@@ -6,15 +6,17 @@ Las reglas de negocio (fórmulas, equivalencias IPV ↔ cuadre, validaciones) es
 
 ## Qué hace esta versión (MVP)
 
-| Comando                 | Qué hace                                                                                                                                                                                                                                             |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/ipv`                  | Cargar el IPV: se envía o reenvía el `.xlsx` al bot. Si el archivo trae varias hojas, el bot pregunta cuál analizar (ver [Elegir la hoja del IPV](#elegir-la-hoja-del-ipv)). Muestra una vista previa y pide confirmación antes de crear la pestaña. |
-| `/validar [03\|semana]` | Revisa el cuadre y agrupa los hallazgos por severidad 🔴 (afecta la ganancia), 🟡 (inventario o inversión) y ⚪ (cosmético).                                                                                                                         |
-| `/tc 780 [03]`          | Fija la tasa de cambio del día (celda Q18), con confirmación.                                                                                                                                                                                        |
-| `/gasto`                | Registra un gasto en la hoja **Gastos** (historial), ver [Registrar un gasto](#registrar-un-gasto). No cambia el cuadre.                                                                                                                             |
-| `/deshacer`             | Revierte la última escritura en la hoja, con confirmación.                                                                                                                                                                                           |
-| `/ayuda`                | Lista de comandos según el rol.                                                                                                                                                                                                                      |
-| `/cancelar`             | Abandona una acción en curso (por ejemplo, cuando el bot espera el motivo de "⚠️ Confirmar igual").                                                                                                                                                  |
+| Comando                          | Qué hace                                                                                                                                                                                                                                             |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/ipv`                           | Cargar el IPV: se envía o reenvía el `.xlsx` al bot. Si el archivo trae varias hojas, el bot pregunta cuál analizar (ver [Elegir la hoja del IPV](#elegir-la-hoja-del-ipv)). Muestra una vista previa y pide confirmación antes de crear la pestaña. |
+| `/validar [03\|semana]`          | Revisa el cuadre y agrupa los hallazgos por severidad 🔴 (afecta la ganancia), 🟡 (inventario o inversión) y ⚪ (cosmético).                                                                                                                         |
+| `/tc 780 [03]`                   | Fija la tasa de cambio del día (celda Q18), con confirmación.                                                                                                                                                                                        |
+| `/gasto`                         | Registra un gasto en la hoja **Gastos** (historial), ver [Registrar un gasto](#registrar-un-gasto). No cambia el cuadre.                                                                                                                             |
+| `/deshacer`                      | Revierte la última escritura en la hoja, con confirmación.                                                                                                                                                                                           |
+| `/cuadremes [2026-11 enlace]`    | Dueñas: lista o registra el libro de cuadre de un mes (ver [Un libro de cuadre por mes](#un-libro-de-cuadre-por-mes)).                                                                                                                               |
+| `/cierremes [2026-10] [reabrir]` | Dueñas: revisa el mes completo y lo cierra con 🔒 Cerrar mes (ver [Cerrar el mes](#cerrar-el-mes)).                                                                                                                                                  |
+| `/ayuda`                         | Lista de comandos según el rol.                                                                                                                                                                                                                      |
+| `/cancelar`                      | Abandona una acción en curso (por ejemplo, cuando el bot espera el motivo de "⚠️ Confirmar igual").                                                                                                                                                  |
 
 **Reportes** (dueñas y socios; el dependiente recibe "No autorizado para reportes"). Todo se recalcula desde las cantidades, costos y precios de cada fila, no desde el resumen de la hoja. Los días son las pestañas `DD` del libro: el libro es el mes.
 
@@ -173,7 +175,8 @@ cp .env.example .env
 | `TELEGRAM_TOKEN`        | Sí          | Token de @BotFather.                                                                                                                                                                                                                                                                                      |
 | `OWNER_IDS`             | Sí          | IDs numéricos de Telegram de las dueñas, separados por coma (`111,222`). Se registran con rol `dueno` al arrancar.                                                                                                                                                                                        |
 | `GOOGLE_SA_JSON`        | No\*        | JSON de la service account: la **ruta** al archivo `.json` o el JSON completo en **una sola línea**.                                                                                                                                                                                                      |
-| `CUADRE_SHEET_ID`       | No\*        | ID de la hoja de cuadre (ver abajo).                                                                                                                                                                                                                                                                      |
+| `CUADRE_SHEET_ID`       | No\*        | ID del libro de cuadre de octubre de 2026 (ver abajo). Los meses siguientes se registran desde el bot con `/cuadremes`.                                                                                                                                                                                   |
+| `CUADRE_SHEET_MONTH`    | No          | Mes del libro de `CUADRE_SHEET_ID`, como `AAAA-MM`. Por defecto `2026-10`. Al arrancar queda registrado para ese mes (solo la primera vez).                                                                                                                                                               |
 | `GASTOS_SPREADSHEET_ID` | No\*\*      | ID de la hoja **Gastos**, donde `/gasto` agrega una fila por gasto. Se saca de la URL igual que el del cuadre.                                                                                                                                                                                            |
 | `CUADRE_SEED_PATH`      | No          | Ruta a un cuadre exportado en `.xlsx`. Si la base de datos está vacía, carga de ahí el catálogo y los costos (usa la última pestaña de días). Recomendado para el primer arranque. Después, los costos salen del cuadre en cada `/ipv` y las equivalencias nuevas de la tabla se suman solas al arrancar. |
 | `DRIVE_IPV_FOLDER_ID`   | No          | Carpeta de Drive del IPV. Todavía no se usa.                                                                                                                                                                                                                                                              |
@@ -239,6 +242,42 @@ Roles válidos: `dueno`, `socio`, `dependiente`. Para desactivar a alguien, pon 
 
 Después de agregar a alguien, esa persona debe enviar **`/start`** al bot: recibe su teclado de botones y el menú "/" de su rol. Si cambias un rol, reinicia el bot (`docker compose restart bot`) o pide a la persona que envíe `/start` de nuevo.
 
+## Un libro de cuadre por mes
+
+Cada mes tiene su propio libro de Google Sheets (`Cuadre K12 2026-11`), con una pestaña por día (`01`, `02`…). El bot escribe cada día en el libro de **su** mes: el IPV del 31 de octubre va al de octubre aunque se cargue el 1 de noviembre. Si un mes no tiene libro, el bot **no carga nada** y explica cómo registrarlo; nunca escribe en el libro de otro mes.
+
+**Crear el libro del mes siguiente** (desde el día 25 el bot se lo recuerda a las dueñas cada mañana hasta que esté):
+
+1. Abre el cuadre del mes en curso → **Archivo → Hacer una copia**.
+2. Ponle de nombre `Cuadre K12 AAAA-MM` (por ejemplo `Cuadre K12 2026-11`) y borra las pestañas de los días. Deja `_plantilla` (está oculta).
+3. Compártelo con el correo de la service account como **Editor**.
+4. En el bot: `/cuadremes 2026-11 <enlace de la copia>`. El bot comprueba que puede abrirlo, avisa si no tiene `_plantilla` o si todavía trae días, y pide ✅ Registrar.
+
+`/cuadremes` sin datos muestra los libros registrados y avisa si falta el del mes siguiente. El libro de `CUADRE_SHEET_ID` queda registrado solo para `CUADRE_SHEET_MONTH` (octubre de 2026).
+
+**Lectura entre meses:**
+
+- `/mes` y los reportes sin rango (`/gastos`, `/top`, `/producto`…) usan el mes en curso.
+- `/semana`, `/rango` y los reportes con rango pueden empezar en el mes anterior: sus días aparecen como `DD/MM` (`28/10`). Si un día no existe en el mes en curso, se busca en el anterior (`/rango 28 03` el 3 de noviembre va del 28 de octubre al 3 de noviembre).
+- Al cargar el IPV, el último costo conocido se busca también en el libro del mes anterior, y `/validar` compara el cierre del último día del mes anterior con el inicio del 01.
+- `/tc 780 DD`: si el día es mayor que hoy, es del mes anterior (`/tc 780 31` el 1 de noviembre va al 31 de octubre).
+
+**Pestaña `Resumen`:** cada libro tiene una pestaña `Resumen` con una fila por día (01–31): venta, costo, utilidad bruta, % margen, otros gastos, utilidad neta, TC, venta en USD e inversión final, más una fila de totales (el margen sale de los totales, no del promedio; la inversión final es la del último día cargado). Cada celda lee su día con `INDIRECT`, así que un día que todavía no existe o que se borró con `/deshacer` queda en blanco en lugar de `#REF!`. El bot la crea al registrar el libro con `/cuadremes` o en la primera carga del mes si falta; si ya existe no la toca, así que se le pueden agregar columnas a la derecha o formato. Como siempre tiene 31 filas, viaja intacta en la copia del libro del mes siguiente.
+
+## Cerrar el mes
+
+`/cierremes` (solo dueñas) revisa un mes completo. Sin mes, del 1 al 10 revisa el mes anterior y desde el 11 el mes en curso; `/cierremes 2026-10` revisa ese mes.
+
+La revisión empieza con un resumen (utilidad neta, venta, margen, inventario final y conteo de hallazgos), sigue con la tabla por día y la revisión, y termina con sugerencias:
+
+- Días del calendario sin pestaña (un mes pasado completo; el mes en curso, hasta ayer).
+- Validaciones 🔴🟡⚪ de todo el mes, con la continuidad del 01 contra el último día del mes anterior.
+- Productos vendidos sin costo y cuánto inflan la utilidad (estimado).
+- Inventario final del último día al costo: la apertura del mes siguiente.
+- Si ya está registrado el libro del mes siguiente.
+
+**🔒 Cerrar mes** lo marca cerrado y deja en el registro de cambios el inventario final como punto de partida. Desde entonces, `/ipv`, `/tc` y `/deshacer` sobre ese mes muestran **⚠️ Confirmar igual**: solo una dueña puede confirmarlos, con el motivo. `/cierremes 2026-10 reabrir` lo vuelve a abrir.
+
 ## Flujo diario
 
 1. **Cargar el IPV:** reenviar el `.xlsx` al bot y, si tiene varias hojas, decir cuál analizar. Revisar la vista previa: hoja elegida, venta, utilidad bruta, productos sin costo y alertas. El costo de cada producto es el último que tiene en las pestañas anteriores del cuadre (los que se escriben a mano cuentan desde la carga siguiente); el catálogo del bot solo se usa si el cuadre nunca tuvo ese costo.
@@ -259,8 +298,8 @@ Después de agregar a alguien, esa persona debe enviar **`/start`** al bot: reci
 
 - **`_plantilla`** (oculta): encabezados, formato y fórmulas de una hoja diaria. Cada día nuevo se crea duplicándola. Si ya existe, el bot no la modifica.
 - **`_config`** (solo lectura): copia del catálogo del bot (producto, alias del IPV, costo, categoría, perecedero, mínimo). **Se sobrescribe completa**; los cambios hechos a mano se pierden. Los costos y equivalencias se cambian desde el bot.
+- **`Resumen`**: una fila por día del mes con fórmulas que leen cada pestaña (ver [Un libro de cuadre por mes](#un-libro-de-cuadre-por-mes)). Se crea una sola vez y el bot no la vuelve a tocar.
 
 ## Pendiente
 
-- **Nombres de pestaña por mes.** Las pestañas diarias se llaman `01`, `02`… sin mes. Falta decidir entre un libro por mes o pestañas `DD-MM`. Mientras tanto, si la pestaña del día ya existe, el bot rechaza la carga y no sobrescribe nada.
 - **Siguiente entrega:** inventario y compras, sugerencias, vigilancia de la carpeta de Drive y tareas programadas (09:00 y 21:00).
