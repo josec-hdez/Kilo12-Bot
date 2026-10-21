@@ -1,6 +1,15 @@
 import { Bot, GrammyError, HttpError, InlineKeyboard, type NextFunction } from 'grammy';
 import type { UserFromGetMe } from 'grammy/types';
 import { AUTH_STATUS, authorize, type AuthDeps } from '../../app/authorize.js';
+import {
+  CLOSE_REQUEST,
+  confirmMonthClose,
+  parseCloseArgs,
+  reopenMonthClose,
+  reviewMonthClose,
+  type CloseMonthDeps,
+  type CloseReview,
+} from '../../app/close-month.js';
 import { cancelPending, confirmPending } from '../../app/confirm.js';
 import { FREE_TEXT_REPLY, helpText } from '../../app/help.js';
 import {
@@ -58,6 +67,14 @@ import {
   startExpense,
   type ExpenseDraft,
 } from '../../app/record-expense.js';
+import {
+  BOOK_PREPARE,
+  bookListText,
+  confirmBookRegistration,
+  prepareBookRegistration,
+  type BookInspector,
+  type BookRegistration,
+} from '../../app/register-book.js';
 import { prepareSetTc } from '../../app/set-tc.js';
 import { todayDateIn, todayIn } from '../../app/today.js';
 import { prepareUndo } from '../../app/undo.js';
@@ -65,6 +82,8 @@ import { parseValidateArgs, runValidation } from '../../app/validate-report.js';
 import { can, PERMISSION } from '../../core/auth.js';
 import { parseExpenseCurrency } from '../../core/expense.js';
 import { buildAliasIndex } from '../../core/mapping.js';
+import type { MonthClose } from '../../core/month-close.js';
+import { monthName, monthOfDate, monthOfDayNumber, monthOfRef } from '../../core/months.js';
 import { SETTING } from '../../core/settings.js';
 import type { DayRef, IpvDay } from '../../core/types.js';
 import type { IpvSource } from '../../ports/ipv-source.js';
@@ -76,7 +95,9 @@ import type { BotContext } from './context.js';
 import { telegramFileDownloader, type FileDownloader } from './file-downloader.js';
 import { syncUserCommandMenu } from './command-menu.js';
 import {
+  bookConfirmKeyboard,
   CALLBACK,
+  closeMonthKeyboard,
   confirmKeyboard,
   dayButtons,
   EXPENSE_ACTION,
@@ -103,9 +124,17 @@ export interface BotDeps {
   cuadre: CuadreReader;
   /** Historial de /gasto (hoja "Gastos"); nunca escribe en el cuadre. */
   expenses: ExpenseLog;
+  /** /cuadremes: abre un libro para revisarlo. Sin esto (hoja simulada) no se registran libros. */
+  books?: BookAdmin;
   timezone: string;
   /** Descarga de archivos; por defecto, la API de Telegram. */
   downloadFile?: FileDownloader;
+}
+
+export interface BookAdmin {
+  inspect: BookInspector | null;
+  /** Correo de la service account: con quién compartir cada libro nuevo. */
+  serviceAccountEmail: string | null;
 }
 
 export interface CreateBotOptions {
@@ -238,6 +267,8 @@ const FLOW_CALLBACK_COMMAND: Readonly<Record<string, string>> = {
   // Elegir producto completa /fila o /producto: exige el mismo permiso.
   [CALLBACK.PRODUCT]: '/producto',
   [CALLBACK.EXPENSE]: '/gasto',
+  [CALLBACK.BOOK]: '/cuadremes',
+  [CALLBACK.CLOSE_MONTH]: '/cierremes',
 };
 
 /**
@@ -357,6 +388,12 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
   const productChoices = new TtlStore<ProductChoice>(CONVERSATION_TTL_MS, clock);
   /** Flujo guiado en curso, por usuario: cada uno responde solo a sus preguntas. */
   const flows = new TtlStore<GuidedFlow>(CONVERSATION_TTL_MS, clock);
+  /** Libro de /cuadremes esperando ✅ Registrar, por usuario. */
+  const bookRegistrations = new TtlStore<BookRegistration>(CONVERSATION_TTL_MS, clock);
+  /** Mes revisado con /cierremes esperando 🔒 Cerrar mes, por usuario. */
+  const monthCloses = new TtlStore<MonthClose>(CONVERSATION_TTL_MS, clock);
+  /** Fecha de hoy (con año) en la zona del negocio. */
+  const today = () => todayDateIn(clock(), deps.timezone);
   const flowCommand = (telegramId: number) =>
     ipvChoices.get(String(telegramId)) === undefined
       ? flows.get(String(telegramId))?.command
@@ -418,8 +455,10 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
       await ctx.reply(`No pude leer la hoja «${sheet}»: ${error.message}`);
       return;
     }
+    // El día va al libro de su mes (un IPV de diciembre cargado en enero es del año pasado).
+    const month = monthOfRef(ipv, today());
     const prepared = await withTyping(ctx, () =>
-      prepareIpvLoad(deps.pipeline, actorOf(ctx), { ipv, tc: null }),
+      prepareIpvLoad(deps.pipeline, actorOf(ctx), { ipv, tc: null, month }),
     );
     await showPrepared(ctx, prepared);
   }
@@ -660,11 +699,12 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
       await ctx.reply(BOT_TEXT.TC_USAGE);
       return;
     }
-    await showPrepared(ctx, await prepareSetTc(deps.pipeline, actorOf(ctx), { tab, tc }));
+    // Un día mayor que hoy es del mes anterior (`/tc 780 31` el 1 de noviembre).
+    const month = rawTab === '' ? monthOfDate(today()) : monthOfDayNumber(Number(tab), today());
+    await showPrepared(ctx, await prepareSetTc(deps.pipeline, actorOf(ctx), { tab, tc, month }));
   }
 
   // ------------------------------------------------------------ ➕ Gasto
-  const today = () => todayDateIn(clock(), deps.timezone);
 
   /** Guarda el borrador y hace la pregunta de su paso. */
   async function askExpense(ctx: BotContext, draft: ExpenseDraft): Promise<void> {
@@ -724,6 +764,83 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
     await ctx.reply(result.message);
   }
 
+  // ------------------------------------------------------------ 📒 /cuadremes
+  /** Sin datos: la lista de libros. Con mes y enlace: revisa la hoja y pide ✅. */
+  async function bookCommand(ctx: BotContext, args: string): Promise<void> {
+    const key = String(actorOf(ctx).telegramId);
+    bookRegistrations.delete(key);
+    if (args.trim() === '') {
+      await ctx.reply(bookListText({ settings: deps.settings, today: today() }), {
+        link_preview_options: { is_disabled: true },
+      });
+      return;
+    }
+    const result = await withTyping(ctx, () =>
+      prepareBookRegistration(
+        {
+          settings: deps.settings,
+          inspect: deps.books?.inspect ?? null,
+          serviceAccountEmail: deps.books?.serviceAccountEmail ?? null,
+          today: today(),
+        },
+        args,
+      ),
+    );
+    if (result.status === BOOK_PREPARE.REJECTED) {
+      await ctx.reply(result.message);
+      return;
+    }
+    bookRegistrations.set(key, result.registration);
+    await ctx.reply(result.preview, {
+      reply_markup: bookConfirmKeyboard(),
+      link_preview_options: { is_disabled: true },
+    });
+  }
+
+  // ------------------------------------------------------------ 🔒 /cierremes
+  function closeDeps(): CloseMonthDeps {
+    return {
+      books: deps.pipeline.books,
+      settings: deps.settings,
+      changeLog: deps.pipeline.changeLog,
+      hasFixedExpenses: deps.settings.get(SETTING.HAS_FIXED_EXPENSES) === true,
+      today: today(),
+    };
+  }
+
+  /** Revisa el mes y ofrece 🔒 Cerrar mes; `reabrir` lo abre otra vez. */
+  async function closeMonthCommand(ctx: BotContext, args: string): Promise<void> {
+    const key = String(actorOf(ctx).telegramId);
+    monthCloses.delete(key);
+    const request = parseCloseArgs(args, today());
+    if (request.kind === CLOSE_REQUEST.INVALID) {
+      await ctx.reply(request.message);
+      return;
+    }
+    if (request.kind === CLOSE_REQUEST.REOPEN) {
+      await ctx.reply(reopenMonthClose(closeDeps(), actorOf(ctx).telegramId, request.month));
+      return;
+    }
+    let review: CloseReview;
+    try {
+      review = await withTyping(ctx, () => reviewMonthClose(closeDeps(), request.month));
+    } catch (error) {
+      console.error('Error revisando /cierremes:', error);
+      const reason = error instanceof Error ? error.message : String(error);
+      await ctx.reply(`${BOT_TEXT.REPORT_ERROR}: ${reason}`);
+      return;
+    }
+    const closing = review.closable !== null && review.close !== null ? review.close : null;
+    if (closing !== null) monthCloses.set(key, closing);
+    for (const [index, message] of review.messages.entries()) {
+      const last = index === review.messages.length - 1;
+      await ctx.reply(message, {
+        parse_mode: 'HTML',
+        ...(last && closing !== null ? { reply_markup: closeMonthKeyboard() } : {}),
+      });
+    }
+  }
+
   async function cancel(ctx: BotContext): Promise<void> {
     const key = String(actorOf(ctx).telegramId);
     const hadReason = awaitingReason.get(key) !== undefined;
@@ -762,6 +879,12 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
       case 'deshacer':
         await showPrepared(ctx, prepareUndo(deps.pipeline, actorOf(ctx)));
         return;
+      case 'cuadremes':
+        await bookCommand(ctx, args);
+        return;
+      case 'cierremes':
+        await closeMonthCommand(ctx, args);
+        return;
       case 'cancelar':
         await cancel(ctx);
         return;
@@ -783,6 +906,8 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
     'tc',
     'gasto',
     'deshacer',
+    'cuadremes',
+    'cierremes',
     'cancelar',
     ...Object.keys(reports),
   ]) {
@@ -1039,6 +1164,48 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
         return;
     }
     await ctx.reply(BOT_TEXT.FLOW_EXPIRED);
+  });
+
+  // 📒 /cuadremes: ✅ Registrar / ❌ Cancelar.
+  bot.callbackQuery(new RegExp(`^${CALLBACK.BOOK}:(ok|no)$`), async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const key = String(actorOf(ctx).telegramId);
+    const registration = bookRegistrations.get(key);
+    bookRegistrations.delete(key);
+    await removeKeyboard(ctx);
+    if (registration === undefined) {
+      await ctx.reply(BOT_TEXT.FLOW_EXPIRED);
+      return;
+    }
+    if (ctx.match[1] === 'no') {
+      await ctx.reply(BOT_TEXT.FLOW_CANCELLED);
+      return;
+    }
+    const done = await withTyping(ctx, () =>
+      confirmBookRegistration(deps.settings, registration, deps.pipeline.books),
+    );
+    await ctx.reply(done, {
+      link_preview_options: { is_disabled: true },
+    });
+  });
+
+  // 🔒 /cierremes: 🔒 Cerrar mes / ❌ No cerrar.
+  bot.callbackQuery(new RegExp(`^${CALLBACK.CLOSE_MONTH}:(ok|no)$`), async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const actor = actorOf(ctx);
+    const key = String(actor.telegramId);
+    const close = monthCloses.get(key);
+    monthCloses.delete(key);
+    await removeKeyboard(ctx);
+    if (close === undefined) {
+      await ctx.reply(BOT_TEXT.FLOW_EXPIRED);
+      return;
+    }
+    if (ctx.match[1] === 'no') {
+      await ctx.reply(`${monthName(close.month)} sigue abierto.`);
+      return;
+    }
+    await ctx.reply(confirmMonthClose(closeDeps(), actor.telegramId, close));
   });
 
   // Menú en línea de versiones anteriores: sigue funcionando desde el historial del chat.

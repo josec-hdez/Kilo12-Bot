@@ -22,6 +22,10 @@ export const CALLBACK = {
   PRODUCT: 'prod',
   /** ➕ Gasto: `gx:today`, `gx:other`, `gx:cur:<moneda>`, `gx:ok`, `gx:no`. */
   EXPENSE: 'gx',
+  /** /cuadremes: `cm:ok` registra el libro mostrado, `cm:no` no hace nada. */
+  BOOK: 'cm',
+  /** /cierremes: `cx:ok` cierra el mes revisado, `cx:no` lo deja abierto. */
+  CLOSE_MONTH: 'cx',
 } as const;
 
 /** Acciones de los botones de ➕ Gasto (lo que va después de `gx:`). */
@@ -110,4 +114,18 @@ export function expenseConfirmKeyboard(): InlineKeyboard {
   return new InlineKeyboard()
     .text('✅ Confirmar', `${CALLBACK.EXPENSE}:${EXPENSE_ACTION.CONFIRM}`)
     .text('❌ Cancelar', `${CALLBACK.EXPENSE}:${EXPENSE_ACTION.CANCEL}`);
+}
+
+/** ✅ Registrar / ❌ Cancelar del libro de /cuadremes. */
+/** 🔒 Cerrar mes / ❌ No cerrar, debajo de la revisión de /cierremes. */
+export function closeMonthKeyboard(): InlineKeyboard {
+  return new InlineKeyboard()
+    .text('🔒 Cerrar mes', `${CALLBACK.CLOSE_MONTH}:ok`)
+    .text('❌ No cerrar', `${CALLBACK.CLOSE_MONTH}:no`);
+}
+
+export function bookConfirmKeyboard(): InlineKeyboard {
+  return new InlineKeyboard()
+    .text('✅ Registrar', `${CALLBACK.BOOK}:ok`)
+    .text('❌ Cancelar', `${CALLBACK.BOOK}:no`);
 }
