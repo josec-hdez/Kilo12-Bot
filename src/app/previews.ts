@@ -60,6 +60,8 @@ export interface LoadPreviewInput {
   blockers: readonly Finding[];
   showFinancials: boolean;
   canForce: boolean;
+  /** Una dueña recibe después una pregunta por cada producto sin equivalencia con candidatos. */
+  askAliases?: boolean;
 }
 
 export function loadIpvPreview(input: LoadPreviewInput): string {
@@ -95,8 +97,17 @@ export function loadIpvPreview(input: LoadPreviewInput): string {
       return `${ipvProduct}${hint}`;
     });
     lines.push(`🆕 Sin equivalencia (${String(list.length)}), se agregan al final: ${names(list)}`);
+    if (input.askAliases === true) {
+      lines.push('   Abajo te pregunto, uno por uno, si alguno ya existe en el cuadre.');
+    }
   }
   for (const warning of draft.warnings) lines.push(`⚠️ ${warning}`);
+  for (const conflict of draft.priceConflicts) {
+    lines.push(
+      `💡 ${conflict.product} junta ${conflict.ipvProducts.join(' + ')}, que el IPV vende a precios distintos (${conflict.prices.map(fmt).join(' y ')}): la venta no cuadra con el IPV. ` +
+        'Unifica el precio en el programa de control, o separa los productos con /equivalencia quitar <nombre del IPV>.',
+    );
+  }
 
   lines.push('', ...alertLines(input.alerts));
 

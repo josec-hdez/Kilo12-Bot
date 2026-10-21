@@ -22,6 +22,20 @@ export const CALLBACK = {
   PRODUCT: 'prod',
   /** ➕ Gasto: `gx:today`, `gx:other`, `gx:cur:<moneda>`, `gx:ok`, `gx:no`. */
   EXPENSE: 'gx',
+  /** /cuadremes: `cm:ok` registra el libro mostrado, `cm:no` no hace nada. */
+  BOOK: 'cm',
+  /** /cierremes: `cx:ok` cierra el mes revisado, `cx:no` lo deja abierto. */
+  CLOSE_MONTH: 'cx',
+  /** /equivalencia: `eq:ok` guarda el cambio mostrado, `eq:no` no hace nada. */
+  EQUIVALENCE: 'eq',
+  /** Producto sin equivalencia en /ipv: `ia:<índice>` es ese candidato, `ia:new` es nuevo, `ia:end` deja de preguntar. */
+  IPV_ALIAS: 'ia',
+} as const;
+
+/** Respuestas a la pregunta de equivalencia de /ipv (lo que va después de `ia:`). */
+export const IPV_ALIAS_ACTION = {
+  NEW: 'new',
+  END: 'end',
 } as const;
 
 /** Acciones de los botones de ➕ Gasto (lo que va después de `gx:`). */
@@ -110,4 +124,36 @@ export function expenseConfirmKeyboard(): InlineKeyboard {
   return new InlineKeyboard()
     .text('✅ Confirmar', `${CALLBACK.EXPENSE}:${EXPENSE_ACTION.CONFIRM}`)
     .text('❌ Cancelar', `${CALLBACK.EXPENSE}:${EXPENSE_ACTION.CANCEL}`);
+}
+
+/** ✅ Registrar / ❌ Cancelar del libro de /cuadremes. */
+/** 🔒 Cerrar mes / ❌ No cerrar, debajo de la revisión de /cierremes. */
+export function closeMonthKeyboard(): InlineKeyboard {
+  return new InlineKeyboard()
+    .text('🔒 Cerrar mes', `${CALLBACK.CLOSE_MONTH}:ok`)
+    .text('❌ No cerrar', `${CALLBACK.CLOSE_MONTH}:no`);
+}
+
+export function bookConfirmKeyboard(): InlineKeyboard {
+  return new InlineKeyboard()
+    .text('✅ Registrar', `${CALLBACK.BOOK}:ok`)
+    .text('❌ Cancelar', `${CALLBACK.BOOK}:no`);
+}
+
+/** ✅ Guardar / ❌ Cancelar de /equivalencia. */
+export function equivalenceConfirmKeyboard(): InlineKeyboard {
+  return new InlineKeyboard()
+    .text('✅ Guardar', `${CALLBACK.EQUIVALENCE}:ok`)
+    .text('❌ Cancelar', `${CALLBACK.EQUIVALENCE}:no`);
+}
+
+/** Un botón por candidato del cuadre, [Es nuevo] y [Dejar de preguntar]. */
+export function ipvAliasKeyboard(candidates: readonly string[]): InlineKeyboard {
+  const keyboard = new InlineKeyboard();
+  candidates.forEach((candidate, index) => {
+    keyboard.text(candidate, `${CALLBACK.IPV_ALIAS}:${String(index)}`).row();
+  });
+  return keyboard
+    .text('🆕 Es nuevo', `${CALLBACK.IPV_ALIAS}:${IPV_ALIAS_ACTION.NEW}`)
+    .text('⏭ Dejar de preguntar', `${CALLBACK.IPV_ALIAS}:${IPV_ALIAS_ACTION.END}`);
 }

@@ -4,6 +4,7 @@ import {
   buildLastKnownCosts,
   cuadreTabsBefore,
   lookupCost,
+  planCatalogSync,
 } from '../../src/core/costs.js';
 
 describe('buildCostCatalog', () => {
@@ -87,5 +88,49 @@ describe('buildLastKnownCosts', () => {
   it('suma los productos que solo están en el cuadre', () => {
     const costs = buildLastKnownCosts([], [[{ product: 'azucar campofino', costo: 1080 }]]);
     expect(lookupCost(costs, 'azucar campofino')?.costo).toBe(1080);
+  });
+});
+
+describe('planCatalogSync', () => {
+  const catalog = [
+    { product: 'Pollo', costo: 800 },
+    { product: 'sal', costo: 500 },
+    { product: 'bijol', costo: null },
+  ];
+
+  it('lista productos nuevos y costos distintos, con el nombre del catálogo', () => {
+    expect(
+      planCatalogSync(catalog, [
+        { product: 'pollo', costo: 809 },
+        { product: 'sal', costo: 500 },
+        { product: 'bijol', costo: 300 },
+        { product: 'comino', costo: null },
+      ]),
+    ).toEqual({
+      newProducts: ['comino'],
+      costUpdates: [
+        { product: 'Pollo', cost: 809, previous: 800 },
+        { product: 'bijol', cost: 300, previous: null },
+      ],
+    });
+  });
+
+  it('un costo vacío o 0 no borra el del catálogo; gana el último del cuadre', () => {
+    expect(
+      planCatalogSync(catalog, [
+        { product: 'sal', costo: 520 },
+        { product: 'sal', costo: 0 },
+        { product: 'pollo', costo: null },
+      ]).costUpdates,
+    ).toEqual([{ product: 'sal', cost: 520, previous: 500 }]);
+  });
+
+  it('ignora los nombres que son equivalencia de otro producto', () => {
+    expect(
+      planCatalogSync(catalog, [{ product: 'chupa-chupa', costo: 65 }], ['chupa-chupa']),
+    ).toEqual({
+      newProducts: [],
+      costUpdates: [],
+    });
   });
 });

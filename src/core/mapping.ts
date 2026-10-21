@@ -94,8 +94,8 @@ function similarity(a: string, b: string): number {
 }
 
 /**
- * Productos del catálogo que se parecen al nombre dado. Solo sugiere: las dueñas
- * confirman cada emparejamiento antes de agregarlo a la tabla.
+ * Productos del catálogo que se parecen al nombre dado (búsqueda de /producto y /fila).
+ * Solo sugiere: nunca empareja por su cuenta.
  */
 export function suggestMatches(
   name: string,
@@ -105,6 +105,59 @@ export function suggestMatches(
   const key = normalizeName(name);
   return catalog
     .map((product) => ({ product, score: similarity(key, normalizeName(product)) }))
+    .filter((suggestion) => suggestion.score >= minScore)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit);
+}
+
+/** Mismo nombre sin espacios ni signos: `chupa-chupa`, `chupa chupa` y `chupachupa`. */
+const COMPACT_SCORE = 0.95;
+/** Todas las palabras del nombre corto están, con alguna letra de diferencia, en el largo. */
+const FUZZY_TOKEN_MIN = 0.8;
+/** Puntaje cuando el nombre corto es menos de la mitad del largo (`azucar` → `azucar campofino`). */
+const LOOSE_CONTAINMENT_SCORE = 0.8;
+
+const compact = (value: string): string => value.replace(/[^\p{L}\p{N}]/gu, '');
+
+const tokenRatio = (a: string, b: string): number =>
+  1 - distance(a, b) / Math.max(a.length, b.length, 1);
+
+/** Parecido para proponer equivalencias: tolera guiones, erratas y nombres con marca. */
+function equivalenceSimilarity(a: string, b: string): number {
+  const base = similarity(a, b);
+  const ca = compact(a);
+  const cb = compact(b);
+  if (ca !== '' && ca === cb) return Math.max(base, COMPACT_SCORE);
+
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a];
+  const longTokens = long.split(' ').filter((token) => token !== '');
+  const shortTokens = short.split(' ').filter((token) => token !== '');
+  const fuzzyContained =
+    shortTokens.length > 0 &&
+    shortTokens.every((token) =>
+      longTokens.some((candidate) => tokenRatio(token, candidate) >= FUZZY_TOKEN_MIN),
+    );
+  if (!fuzzyContained) return base;
+  const score =
+    short.length / long.length >= CONTAINMENT_MIN_RATIO
+      ? CONTAINMENT_SCORE
+      : LOOSE_CONTAINMENT_SCORE;
+  return Math.max(base, score);
+}
+
+/**
+ * Productos del cuadre que podrían ser el mismo que un producto del IPV sin
+ * equivalencia. Es más tolerante que `suggestMatches` porque solo propone: una dueña
+ * elige con un botón antes de guardar la equivalencia.
+ */
+export function equivalenceCandidates(
+  name: string,
+  catalog: readonly string[],
+  { minScore = DEFAULT_MIN_SCORE, limit = DEFAULT_LIMIT }: SuggestOptions = {},
+): MatchSuggestion[] {
+  const key = normalizeName(name);
+  return catalog
+    .map((product) => ({ product, score: equivalenceSimilarity(key, normalizeName(product)) }))
     .filter((suggestion) => suggestion.score >= minScore)
     .sort((a, b) => b.score - a.score)
     .slice(0, limit);

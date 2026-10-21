@@ -93,6 +93,10 @@ export const COMMAND_PERMISSION: Readonly<Record<string, Permission | null>> = {
   equivalencia: PERMISSION.MANAGE_EQUIVALENCES,
   sugerencias: PERMISSION.VIEW_FINANCIALS,
   config: PERMISSION.CONFIGURE,
+  /** Registrar el libro de cuadre de un mes: solo las dueñas. */
+  cuadremes: PERMISSION.CONFIGURE,
+  /** Revisar y cerrar un mes: solo las dueñas. */
+  cierremes: PERMISSION.CONFIGURE,
 };
 
 /** `/TC@kilo12_bot` → `tc`. */

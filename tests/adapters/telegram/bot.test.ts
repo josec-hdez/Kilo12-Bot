@@ -23,9 +23,11 @@ import {
   splitMessage,
 } from '../../../src/adapters/telegram/bot.js';
 import { asCuadreReader, CuadreXlsxReader } from '../../../src/adapters/xlsx/cuadre-xlsx-reader.js';
+import { readBookRegistry, singleBook } from '../../../src/app/cuadre-books.js';
 import { FREE_TEXT_REPLY } from '../../../src/app/help.js';
 import { keyboardRowsFor, menuCommandsFor } from '../../../src/app/keyboard-menu.js';
 import { MAX_TABLE_WIDTH, preLines } from '../../../src/app/report-format.js';
+import { isMonthClosed } from '../../../src/app/closed-months.js';
 import { initialCuadreSeed, seedAll } from '../../../src/app/seed.js';
 import { ROLE } from '../../../src/core/auth.js';
 import { EQUIVALENCES } from '../../../src/core/equivalences.js';
@@ -92,6 +94,10 @@ let changeLog: SqliteChangeLogRepository;
 let accessLog: SqliteAccessLogRepository;
 let bot: ReturnType<typeof createBot>;
 let updateId: number;
+let settingsRepo: SqliteSettingsRepository;
+let catalogRepo: SqliteCatalogRepository;
+/** Pestañas de las hojas que /cuadremes puede abrir (ID → pestañas). */
+let bookTabs: Record<string, string[]>;
 
 function keysOf(payload: Record<string, unknown>): { keys: string[][]; persistent: boolean } {
   const markup = payload.reply_markup as
@@ -118,6 +124,9 @@ beforeEach(async () => {
   const catalog = new SqliteCatalogRepository(db);
   const users = new SqliteUserRepository(db);
   const settings = new SqliteSettingsRepository(db);
+  settingsRepo = settings;
+  catalogRepo = catalog;
+  bookTabs = {};
   seedAll(
     { users, catalog, settings },
     { ownerIds: [OWNER], equivalences: EQUIVALENCES, cuadre: initialCuadreSeed(catalog, cuadre) },
@@ -151,9 +160,9 @@ beforeEach(async () => {
   bot = createBot(
     {
       pipeline: {
-        sheets,
+        books: singleBook(sheets, guardedCuadre),
+        settings,
         catalog,
-        cuadre: guardedCuadre,
         pending: new SqlitePendingActionRepository(db, clock),
         changeLog,
         snapshots: new SqliteSnapshotRepository(db, clock),
@@ -165,6 +174,15 @@ beforeEach(async () => {
       expenses: {
         append: (expense) =>
           expensesError === null ? expenses.append(expense) : Promise.reject(expensesError),
+      },
+      books: {
+        inspect: (id) => {
+          const found = bookTabs[id];
+          return found === undefined
+            ? Promise.reject(new Error('The caller does not have permission'))
+            : Promise.resolve(found);
+        },
+        serviceAccountEmail: 'kilo12bot@test.iam.gserviceaccount.com',
       },
       timezone: 'America/Havana',
       downloadFile: () => Promise.resolve(ipvBuffer),
@@ -293,10 +311,16 @@ const last = (): SentMessage => {
   if (message === undefined) throw new Error('el bot no respondió');
   return message;
 };
-const button = (prefix: string): string => {
-  const data = last().buttons.find((b) => b.startsWith(`${prefix}:`));
-  if (data === undefined) throw new Error(`no hay botón ${prefix} en: ${JSON.stringify(last())}`);
+const button = (prefix: string, message: SentMessage = last()): string => {
+  const data = message.buttons.find((b) => b.startsWith(`${prefix}:`));
+  if (data === undefined) throw new Error(`no hay botón ${prefix} en: ${JSON.stringify(message)}`);
   return data;
+};
+/** Última vista previa de /ipv: después pueden venir las preguntas de equivalencia. */
+const preview = (): SentMessage => {
+  const message = sent.findLast((m) => m.text.startsWith('📥 Hoja'));
+  if (message === undefined) throw new Error('el bot no mostró la vista previa del IPV');
+  return message;
 };
 const tabs = async () => (await sheets.listTabs()).map((t) => t.title);
 
@@ -340,12 +364,12 @@ describe('/ipv', () => {
   it('IPV del POS: reconoce el día por el título, sin preguntar, y la venta cuadra', async () => {
     ipvBuffer = posBuffer;
     await document(OWNER, undefined, 'IPV 2026-10-14.xlsx');
-    expect(last().text).toContain('Hoja «Turno 18 10-14» → pestaña 14');
-    expect(last().text).toContain('Venta: 112,845.5 CUP');
-    expect(last().text).toContain('✅ igual al IMPORTE TOTAL del IPV');
-    expect(last().text).not.toContain('¿A qué día');
+    expect(preview().text).toContain('Hoja «Turno 18 10-14» → pestaña 14');
+    expect(preview().text).toContain('Venta: 112,845.5 CUP');
+    expect(preview().text).toContain('✅ igual al IMPORTE TOTAL del IPV');
+    expect(sent.some((m) => m.text.includes('¿A qué día'))).toBe(false);
 
-    await click(OWNER, button('ok'));
+    await click(OWNER, button('ok', preview()));
     expect(last().text).toContain('✅ Pestaña 14 creada');
     expect(await tabs()).toContain('14');
   });
@@ -390,7 +414,7 @@ describe('/ipv', () => {
   it('elige por nombre normalizado: "2 OCT" encuentra "2 oct "', async () => {
     await document(OWNER);
     await text(OWNER, '2 OCT');
-    expect(last().text).toContain('Hoja «2 oct» → pestaña 02');
+    expect(preview().text).toContain('Hoja «2 oct» → pestaña 02');
   });
 
   it('error de tipeo: propone la hoja parecida y solo la usa con Sí', async () => {
@@ -411,7 +435,7 @@ describe('/ipv', () => {
     await click(OWNER, 'ipvs:n');
     expect(last().text).toContain('¿Cuál analizo?');
     await text(OWNER, '4');
-    expect(last().text).toContain('Hoja «1 oct» → pestaña 01');
+    expect(preview().text).toContain('Hoja «1 oct» → pestaña 01');
   });
 
   it('nada parecido: lo dice y sigue esperando la hoja', async () => {
@@ -433,12 +457,12 @@ describe('/ipv', () => {
     await text(OWNER, 'mañana');
     expect(last().text).toBe(BOT_TEXT.SHEET_DAY_INVALID);
     await text(OWNER, '30 sep');
-    expect(last().text).toContain('Hoja «IPV Alf. 30 sep» → pestaña 30');
+    expect(preview().text).toContain('Hoja «IPV Alf. 30 sep» → pestaña 30');
   });
 
   it('el pie con el nombre de la hoja se salta la pregunta', async () => {
     await document(OWNER, '2 oct');
-    expect(last().text).toContain('Hoja «2 oct» → pestaña 02');
+    expect(preview().text).toContain('Hoja «2 oct» → pestaña 02');
   });
 
   it('pie desconocido: no da error, pregunta la hoja', async () => {
@@ -1010,5 +1034,187 @@ describe('➕ Gasto (historial en la hoja Gastos)', () => {
     await text(OWNER, '📊 Gastos');
     expect(sent.some((m) => m.text.includes('No hay gastos registrados'))).toBe(true);
     expect(expenses.expenses).toEqual([]);
+  });
+});
+
+describe('📒 /cuadremes (libro de cuadre por mes)', () => {
+  const NOV_ID = '1NovNovNovNovNovNovNovNovNovNovNovNov';
+  const link = `https://docs.google.com/spreadsheets/d/${NOV_ID}/edit`;
+
+  it('solo las dueñas pueden registrar libros', async () => {
+    await text(CLERK, `/cuadremes 2026-11 ${link}`);
+    expect(last().text).toContain('Tu rol no permite');
+  });
+
+  it('sin datos lista los libros registrados', async () => {
+    await text(OWNER, '/cuadremes');
+    expect(last().text).toContain('Libros de cuadre registrados');
+  });
+
+  it('revisa la hoja, pide ✅ y registra el libro', async () => {
+    bookTabs[NOV_ID] = ['_plantilla'];
+    await text(OWNER, `/cuadremes 2026-11 ${link}`);
+    expect(last().text).toContain('Libro de cuadre de noviembre 2026');
+    expect(readBookRegistry(settingsRepo)['2026-11']).toBeUndefined();
+    await click(OWNER, button('cm').replace(/:.*/, ':ok'));
+    expect(last().text).toContain('✅ Libro de noviembre 2026 registrado');
+    expect(readBookRegistry(settingsRepo)['2026-11']).toBe(NOV_ID);
+  });
+
+  it('❌ Cancelar no registra nada', async () => {
+    bookTabs[NOV_ID] = ['_plantilla'];
+    await text(OWNER, `/cuadremes 2026-11 ${link}`);
+    await click(OWNER, 'cm:no');
+    expect(last().text).toBe('Listo, cancelado.');
+    expect(readBookRegistry(settingsRepo)['2026-11']).toBeUndefined();
+  });
+
+  it('sin acceso a la hoja dice con qué cuenta compartirla', async () => {
+    await text(OWNER, `/cuadremes 2026-11 ${link}`);
+    expect(last().text).toContain('kilo12bot@test.iam.gserviceaccount.com');
+    expect(last().buttons).toEqual([]);
+  });
+});
+
+describe('🔒 /cierremes (revisar y cerrar el mes)', () => {
+  it('solo las dueñas pueden cerrar un mes', async () => {
+    await text(CLERK, '/cierremes 2026-10');
+    expect(last().text).toContain('Tu rol no permite');
+  });
+
+  it('muestra la revisión y 🔒 Cerrar mes lo marca cerrado; reabrir lo abre', async () => {
+    await text(OWNER, '/cierremes 2026-10');
+    const review = sent.map((m) => m.text).join('\n');
+    expect(review).toContain('Cierre de octubre 2026');
+    expect(review).toContain('Sugerencias');
+    expect(last().parseMode).toBe('HTML');
+    expect(last().buttons).toEqual(['cx:ok', 'cx:no']);
+    expect(isMonthClosed(settingsRepo, '2026-10')).toBe(false);
+
+    await click(OWNER, 'cx:ok');
+    expect(last().text).toContain('octubre 2026 cerrado');
+    expect(isMonthClosed(settingsRepo, '2026-10')).toBe(true);
+
+    await text(OWNER, '/cierremes 2026-10 reabrir');
+    expect(last().text).toContain('reabierto');
+    expect(isMonthClosed(settingsRepo, '2026-10')).toBe(false);
+  });
+
+  it('❌ No cerrar deja el mes abierto', async () => {
+    await text(OWNER, '/cierremes 2026-10');
+    await click(OWNER, 'cx:no');
+    expect(last().text).toBe('octubre 2026 sigue abierto.');
+    expect(isMonthClosed(settingsRepo, '2026-10')).toBe(false);
+  });
+
+  it('un mes inválido explica el uso', async () => {
+    await text(OWNER, '/cierremes octubre');
+    expect(last().text).toContain('Uso: /cierremes');
+  });
+});
+
+describe('equivalencias', () => {
+  it('/ipv: la dueña elige un candidato y la vista previa se rehace con la equivalencia', async () => {
+    await document(OWNER, '2 oct');
+    const first = preview();
+    expect(first.text).toContain('cerveza beck (¿cerveza becks?)');
+    expect(first.text).toContain('Abajo te pregunto, uno por uno');
+    expect(last().text).toContain('🔗 (1 de 2) «cerveza beck» no está en el cuadre');
+    expect(last().buttons).toEqual(['ia:0', 'ia:new', 'ia:end']);
+
+    await click(OWNER, 'ia:0');
+    expect(sent.at(-2)?.text).toBe('✅ «cerveza beck» ahora es equivalencia de cerveza becks.');
+    expect(last().text).toContain('🔗 (2 de 2) «cigarro popular verde caja»');
+
+    await click(OWNER, 'ia:new');
+    const again = preview();
+    expect(again).not.toBe(first);
+    expect(again.text).not.toContain('cerveza beck (');
+    expect(again.text).toContain('cigarro popular verde caja');
+    expect(again.text).not.toContain('Abajo te pregunto');
+    expect(sent.some((m) => m.text.startsWith('🔄 Rehago la vista previa'))).toBe(true);
+    expect(changeLog.list()).toMatchObject([
+      { telegramId: OWNER, action: 'add_equivalence', target: 'cerveza beck' },
+      { telegramId: OWNER, action: 'add_product', target: 'cigarro popular verde caja' },
+    ]);
+    // 🆕 Es nuevo lo guarda en el catálogo: ya no queda "sin equivalencia".
+    expect(catalogRepo.findProduct('cigarro popular verde caja')).toBeDefined();
+    expect(again.text).not.toContain('Sin equivalencia');
+
+    // La vista previa vieja ya no se puede confirmar; la nueva sí.
+    await click(OWNER, button('ok', first));
+    expect(last().text).toBe('Esa acción ya está cerrada.');
+    await click(OWNER, button('ok', again));
+    expect(last().text).toContain('✅ Pestaña 02 creada');
+  });
+
+  it('/ipv: ⏭ Dejar de preguntar sin elegir nada deja la vista previa como estaba', async () => {
+    await document(OWNER, '2 oct');
+    const first = preview();
+    await click(OWNER, 'ia:end');
+    expect(last().text).toBe(
+      'Listo: no se guardó ninguna equivalencia. La vista previa de arriba sigue igual.',
+    );
+    expect(preview()).toBe(first);
+    expect(changeLog.list()).toEqual([]);
+  });
+
+  it('/ipv: si la carga ya se confirmó, la equivalencia queda para la próxima', async () => {
+    await document(OWNER, '2 oct');
+    await click(OWNER, button('ok', preview()));
+    await click(OWNER, 'ia:0');
+    await click(OWNER, 'ia:end');
+    expect(last().text).toContain('Las equivalencias quedaron guardadas');
+    expect(last().text).toContain('Valen desde la próxima carga del IPV');
+  });
+
+  it('/ipv: el dependiente ve la sugerencia en la vista previa, pero no recibe preguntas', async () => {
+    await document(CLERK, '2 oct');
+    expect(last()).toBe(preview());
+    expect(preview().text).toContain('cerveza beck (¿cerveza becks?)');
+    expect(sent.some((m) => m.text.startsWith('🔗'))).toBe(false);
+    await click(CLERK, 'ia:0');
+    expect(answers.at(-1)?.text).toContain('Tu rol no permite');
+  });
+
+  it('/equivalencia: lista, agrega con ✅ y quita con ✅', async () => {
+    await text(OWNER, '/equivalencia');
+    expect(last().text).toContain('📚 Equivalencias');
+    expect(last().text).toContain('pollo ← pollo lb');
+
+    await text(OWNER, '/equivalencia cerveza becks = cerveza beck');
+    expect(last().text).toContain('🔗 Nueva equivalencia');
+    expect(last().buttons).toEqual(['eq:ok', 'eq:no']);
+    await click(OWNER, 'eq:ok');
+    expect(last().text).toBe('✅ «cerveza beck» ahora es equivalencia de cerveza becks.');
+
+    await text(OWNER, '/equivalencia quitar cerveza beck');
+    expect(last().text).toContain('✂️ Quitar equivalencia');
+    await click(OWNER, 'eq:ok');
+    expect(last().text).toBe('✅ «cerveza beck» ya no es equivalencia de cerveza becks.');
+    expect(changeLog.list().map((entry) => entry.action)).toEqual([
+      'add_equivalence',
+      'remove_equivalence',
+    ]);
+  });
+
+  it('/equivalencia: ❌ no guarda, un nombre fuera del cuadre se rechaza y el uso se explica', async () => {
+    await text(OWNER, '/equivalencia cerveza becks = cerveza beck');
+    await click(OWNER, 'eq:no');
+    expect(last().text).toBe(BOT_TEXT.FLOW_CANCELLED);
+
+    await text(OWNER, '/equivalencia cerbeza bek = cerveza beck');
+    expect(last().text).toContain('no está en el cuadre');
+
+    await text(OWNER, '/equivalencia cerveza beck');
+    expect(last().text).toContain('Uso: /equivalencia');
+    expect(changeLog.list()).toEqual([]);
+  });
+
+  it('/equivalencia es solo para las dueñas', async () => {
+    await text(PARTNER, '/equivalencia');
+    expect(last().text).toContain('Tu rol no permite');
+    await text(CLERK, '/equivalencia pollo = pollo lb');
+    expect(last().text).toContain('Tu rol no permite');
   });
 });

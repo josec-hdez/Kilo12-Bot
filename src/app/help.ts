@@ -38,6 +38,24 @@ export const MVP_COMMANDS: readonly CommandHelp[] = [
     description: 'Revertir la última escritura en la hoja.',
   },
   {
+    command: 'cuadremes',
+    usage: '/cuadremes [2026-11 enlace]',
+    description:
+      'Libro de cuadre de cada mes: sin datos, la lista; con mes y enlace, registra la copia nueva (Archivo → Hacer una copia, compartida con el bot).',
+  },
+  {
+    command: 'cierremes',
+    usage: '/cierremes [2026-10] [reabrir]',
+    description:
+      'Revisar y cerrar un mes: días que faltan, errores, continuidad, productos sin costo e inventario final. Sin mes: del 1 al 10, el anterior; después, el actual.',
+  },
+  {
+    command: 'equivalencia',
+    usage: '/equivalencia [cuadre = IPV | quitar IPV]',
+    description:
+      'Nombres del IPV que son el mismo producto del cuadre: sin datos, la lista; «pollo = pollo lb» agrega; «quitar pollo lb» quita. También se eligen en la vista previa de /ipv.',
+  },
+  {
     command: 'hoy',
     usage: '/hoy',
     description: 'Resumen de hoy (o del último día cargado).',

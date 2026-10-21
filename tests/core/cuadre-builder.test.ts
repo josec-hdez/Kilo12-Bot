@@ -95,6 +95,13 @@ describe('buildCuadreDraft', () => {
 
     expect(draft.warnings).toHaveLength(1);
     expect(draft.warnings[0]).toMatch(/refresco reenvasado/);
+    expect(draft.priceConflicts).toEqual([
+      {
+        product: 'refresco reenvasado',
+        ipvProducts: ['refresco cola dispensado', 'refresco naranja dispensado'],
+        prices: [1000, 900],
+      },
+    ]);
   });
 
   it('omite productos sin existencia ni movimiento', () => {

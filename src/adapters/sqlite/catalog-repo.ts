@@ -63,6 +63,17 @@ export class SqliteCatalogRepository implements CatalogRepository {
     this.db.insert(productAliases).values({ productId: target.id, alias, normalizedAlias }).run();
   }
 
+  aliasOwner(alias: string): string | null {
+    return this.findAlias(alias)?.owner ?? null;
+  }
+
+  removeAlias(alias: string): string | null {
+    const existing = this.findAlias(alias);
+    if (existing === undefined) return null;
+    this.db.delete(productAliases).where(eq(productAliases.id, existing.id)).run();
+    return existing.owner;
+  }
+
   setCost(change: CostChange): void {
     const row = this.requireRow(change.product);
     const cost = knownCost(change.cost);
@@ -108,6 +119,15 @@ export class SqliteCatalogRepository implements CatalogRepository {
       .from(products)
       .orderBy(asc(products.id))
       .all();
+  }
+
+  private findAlias(alias: string): { id: number; owner: string } | undefined {
+    return this.db
+      .select({ id: productAliases.id, owner: products.name })
+      .from(productAliases)
+      .innerJoin(products, eq(products.id, productAliases.productId))
+      .where(eq(productAliases.normalizedAlias, normalizeName(alias)))
+      .get();
   }
 
   private findRow(name: string): ProductRow | undefined {

@@ -26,6 +26,9 @@ describe('ayuda por rol', () => {
       'tc',
       'gasto',
       'deshacer',
+      'cuadremes',
+      'cierremes',
+      'equivalencia',
       ...REPORTS,
       'ayuda',
     ]);

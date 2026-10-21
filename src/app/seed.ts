@@ -2,12 +2,14 @@ import { ROLE } from '../core/auth.js';
 import { buildCostCatalog, type CostSource } from '../core/costs.js';
 import type { Equivalence } from '../core/equivalences.js';
 import { DEFAULT_SETTINGS } from '../core/settings.js';
+import { normalizeName } from '../core/tabs.js';
 import type {
   CatalogRepository,
   SettingsRepository,
   UserRepository,
 } from '../ports/repositories.js';
 import type { CuadreSource } from '../ports/cuadre-source.js';
+import { readOwnerAliases } from './manage-equivalences.js';
 
 /**
  * Datos iniciales. Todas las funciones son idempotentes: se pueden correr en cada
@@ -75,14 +77,21 @@ export interface EquivalenceSeedResult {
   conflicts: EquivalenceConflict[];
 }
 
-/** Tabla de equivalencias IPV ↔ cuadre. Crea sin costo los productos que falten. */
+/**
+ * Tabla de equivalencias IPV ↔ cuadre. Crea sin costo los productos que falten.
+ * `ownerAliases`: alias que las dueñas agregaron, movieron o quitaron desde el bot;
+ * la tabla del código no los vuelve a tocar.
+ */
 export function seedEquivalences(
   catalog: CatalogRepository,
   equivalences: readonly Equivalence[],
+  ownerAliases: ReadonlySet<string> = new Set(),
 ): EquivalenceSeedResult {
   const result: EquivalenceSeedResult = { createdProducts: [], addedAliases: 0, conflicts: [] };
 
-  for (const { cuadre, ipv } of equivalences) {
+  for (const { cuadre, ipv: all } of equivalences) {
+    const ipv = all.filter((alias) => !ownerAliases.has(normalizeName(alias)));
+    if (ipv.length === 0) continue;
     const existing = catalog.findProduct(cuadre);
     const product = existing ?? catalog.ensureProduct(cuadre);
     if (existing === undefined) result.createdProducts.push(product.name);
@@ -146,13 +155,17 @@ export interface SeedSummary {
 export function seedAll(deps: SeedDeps, input: SeedInput): SeedSummary {
   seedOwners(deps.users, input.ownerIds);
   seedSettings(deps.settings);
+  const ownerAliases = readOwnerAliases(deps.settings);
   if (input.cuadre === null) {
     if (deps.catalog.listProducts().length === 0) return { catalog: null, equivalences: null };
-    return { catalog: null, equivalences: seedEquivalences(deps.catalog, input.equivalences) };
+    return {
+      catalog: null,
+      equivalences: seedEquivalences(deps.catalog, input.equivalences, ownerAliases),
+    };
   }
 
   const catalog = seedCatalogFromCuadre(deps.catalog, input.cuadre.rows, input.cuadre.source);
-  const equivalences = seedEquivalences(deps.catalog, input.equivalences);
+  const equivalences = seedEquivalences(deps.catalog, input.equivalences, ownerAliases);
   return { catalog, equivalences };
 }
 

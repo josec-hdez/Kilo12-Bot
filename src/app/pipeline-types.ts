@@ -4,10 +4,10 @@ import type {
   ChangeLogRepository,
   Clock,
   PendingActionRepository,
+  SettingsRepository,
   SnapshotRepository,
 } from '../ports/repositories.js';
-import type { CuadreReader } from '../ports/cuadre-source.js';
-import type { SheetsGateway } from '../ports/sheets-gateway.js';
+import type { CuadreBooks } from '../ports/cuadre-books.js';
 
 /**
  * Único camino de escritura en la hoja: vista previa → confirmación → snapshot →
@@ -15,11 +15,15 @@ import type { SheetsGateway } from '../ports/sheets-gateway.js';
  */
 
 export interface PipelineDeps {
-  sheets: SheetsGateway;
+  /**
+   * Un libro de cuadre por mes. Cada escritura va al libro del mes de su día; de sus
+   * pestañas (y de las del mes anterior) sale el último costo conocido al cargar el IPV.
+   */
+  books: CuadreBooks;
+  /** Configuración: de aquí salen los meses cerrados con /cierremes. */
+  settings: SettingsRepository;
   pending: PendingActionRepository;
   catalog: CatalogRepository;
-  /** Lectura del cuadre: de sus pestañas sale el último costo conocido al cargar el IPV. */
-  cuadre: CuadreReader;
   changeLog: ChangeLogRepository;
   snapshots: SnapshotRepository;
   clock: Clock;
@@ -40,17 +44,26 @@ export const PREPARE_STATUS = {
   REJECTED: 'rejected',
 } as const;
 
+/** Producto del IPV sin equivalencia y los del cuadre que podrían ser el mismo. */
+export interface AliasQuestion {
+  ipvProduct: string;
+  candidates: string[];
+}
+
 export interface PrepareReady {
   status: typeof PREPARE_STATUS.READY;
   pendingId: string;
   preview: string;
   /** Hay bloqueos: solo se ofrece "⚠️ Confirmar igual" (dueña + motivo). */
   requiresForce: boolean;
+  /** Solo /ipv y solo para quien gestiona equivalencias: se preguntan tras la vista previa. */
+  aliasQuestions?: AliasQuestion[];
 }
 
 export interface PrepareBlocked {
   status: typeof PREPARE_STATUS.BLOCKED;
   preview: string;
+  aliasQuestions?: AliasQuestion[];
 }
 
 export interface PrepareRejected {

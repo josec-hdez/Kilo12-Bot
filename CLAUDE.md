@@ -32,9 +32,13 @@ En ambos:
 - **Es la fuente de verdad de cantidades y precios de venta.**
 - Se carga un solo turno por día.
 
-### 2. Cuadre (Google Sheets) — `Cuadre K12 Remoto`
+### 2. Cuadre (Google Sheets) — un libro por mes
 
+- **Un libro por mes:** `Cuadre K12 AAAA-MM` (octubre de 2026 es `Cuadre K12 Remoto`). Se crea copiando el del mes anterior (Archivo → Hacer una copia), dejando solo `_plantilla` y `Resumen`, compartiéndolo con la cuenta del bot y registrándolo con `/cuadremes AAAA-MM <enlace>`. Un día se escribe siempre en el libro de su mes; sin libro registrado no se carga.
+- **Pestaña `Resumen`:** una fila por día (01–31) con venta, costo, utilidad bruta, % margen, otros gastos, utilidad neta, TC, venta USD e inversión final, leídas de cada pestaña con `INDIRECT` (un día que no existe queda en blanco), y una fila de totales: margen de los totales, USD sumado día por día, inversión final del último día.
+- **Cierre de mes (`/cierremes`):** revisa días faltantes, validaciones T3 del mes (continuidad del 01 contra el último día del mes anterior), productos sin costo e inventario final (apertura del mes siguiente). Un mes cerrado solo se modifica con "⚠️ Confirmar igual" de una dueña y su motivo.
 - Una hoja por día (`01`, `02`…).
+- El último costo conocido y la continuidad del día 01 se buscan también en el libro del mes anterior.
 - Columnas: `Producto | Costo | Invs inicial | P. Venta | Cant. Inicio | Entradas | Merma | Consumo | Salida | Cant. Final | Venta Bruta | Costo Final | Invs. Final | Utilidad`.
 - **Es la fuente de verdad de costos.**
 - Fórmulas por fila (fila `n`):
@@ -54,7 +58,7 @@ En ambos:
 
 ### 3. Tabla de equivalencias de productos
 
-El IPV y el cuadre usan nombres distintos. Mantén y usa esta tabla, y amplíala cuando aparezcan productos nuevos, previa confirmación del dueño:
+El IPV y el cuadre usan nombres distintos. Esta tabla es el **conjunto inicial**: el bot la carga al arrancar y, desde ahí, las dueñas las gestionan con `/equivalencia` o eligiendo un candidato en la vista previa de `/ipv` (lo que cambian desde el bot manda sobre esta tabla). Amplíala cuando aparezcan productos nuevos, previa confirmación del dueño:
 
 | Cuadre | IPV |
 |---|---|

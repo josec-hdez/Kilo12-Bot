@@ -10,6 +10,7 @@ import {
   resolveProductQuery,
   RESOLVE_STATUS,
   selectDays,
+  type ArgsError,
   type DayRange,
 } from '../core/report-args.js';
 import {
@@ -29,6 +30,7 @@ import {
   type RowFieldKey,
   type TopMetric,
 } from '../core/reports.js';
+import { isQualifiedTab, resolveDayTab } from '../core/months.js';
 import { normalizeName } from '../core/tabs.js';
 import type { CuadreSheet } from '../core/types.js';
 import { SEVERITY, validateDays, type Severity } from '../core/validations.js';
@@ -95,12 +97,20 @@ const text = (...blocks: string[]): TextReport => ({
 const plain = (message: string): TextReport => text(esc(message));
 
 /**
- * Días que forman "el mes". Hoy cada libro del cuadre es un mes (pestañas `DD`), así
- * que son todas las pestañas de días. Si las dueñas eligen pestañas `DD-MM`, solo
- * cambia esta función.
+ * Días que forman "el mes": las pestañas `DD` del libro del mes en curso. Las del mes
+ * anterior (`28/10`) están en la lista para /semana, los rangos y la continuidad, pero
+ * no cuentan como "el mes".
  */
 export function monthDays(days: readonly string[]): string[] {
-  return [...days];
+  return days.filter((day) => !isQualifiedTab(day));
+}
+
+/**
+ * Días de un reporte con rango opcional: sin rango, el mes en curso; con rango, puede
+ * empezar en el mes anterior (`/gastos 28 03`).
+ */
+function periodDays(days: readonly string[], range: DayRange | null): string[] | ArgsError {
+  return range === null ? monthDays(days) : selectDays(days, range);
 }
 
 /** Todos los días de una vez: en Google Sheets son dos llamadas, no dos por día. */
@@ -253,9 +263,10 @@ function topTable(products: readonly ProductAggregate[], metric: TopMetric): str
 async function dayReportFor(
   deps: ReportDeps,
   days: readonly string[],
-  tab: string,
+  wanted: string,
   title: string,
 ): Promise<ReportResult> {
+  const tab = resolveDayTab(days, wanted)?.trim() ?? wanted;
   const index = days.findIndex((day) => day.trim() === tab);
   if (index < 0) return plain(`No existe la pestaña ${tab} en el cuadre.`);
 
@@ -335,9 +346,9 @@ export async function todayReport(deps: ReportDeps, todayTab: string): Promise<R
 async function rangeDays(deps: ReportDeps, raw: string): Promise<{ days: string[] } | TextReport> {
   const range = parseRange(raw);
   if (isArgsError(range)) return plain(range.message);
-  const all = monthDays(await deps.cuadre.listDays());
-  if (all.length === 0) return plain(NO_DAYS);
-  const days = selectDays(all, range);
+  const all = await deps.cuadre.listDays();
+  if (monthDays(all).length === 0) return plain(NO_DAYS);
+  const days = periodDays(all, range);
   return isArgsError(days) ? plain(days.message) : { days };
 }
 
@@ -472,9 +483,9 @@ export async function profitReport(deps: ReportDeps): Promise<ReportResult> {
 export async function topReport(deps: ReportDeps, raw: string): Promise<ReportResult> {
   const args = parseTop(raw);
   if (isArgsError(args)) return plain(args.message);
-  const all = monthDays(await deps.cuadre.listDays());
-  if (all.length === 0) return plain(NO_DAYS);
-  const days = selectDays(all, args.range);
+  const all = await deps.cuadre.listDays();
+  if (monthDays(all).length === 0) return plain(NO_DAYS);
+  const days = periodDays(all, args.range);
   if (isArgsError(days)) return plain(days.message);
 
   const products = aggregateProducts(await readSheets(deps.cuadre, days));
@@ -628,9 +639,9 @@ export async function rowReport(deps: ReportDeps, raw: string): Promise<ReportRe
   if (isArgsError(args)) return plain(args.message);
   const days = await deps.cuadre.listDays();
   if (days.length === 0) return plain(NO_DAYS);
-  const tab = args.day ?? days[days.length - 1]?.trim() ?? '';
-  if (!days.some((day) => day.trim() === tab))
-    return plain(`No existe la pestaña ${tab} en el cuadre.`);
+  const wanted = args.day ?? days[days.length - 1]?.trim() ?? '';
+  const tab = resolveDayTab(days, wanted)?.trim();
+  if (tab === undefined) return plain(`No existe la pestaña ${wanted} en el cuadre.`);
 
   const sheet = await deps.cuadre.readDay(tab);
   const product = chooseFrom(args.query, [sheet], deps, { command: PRODUCT_COMMAND.ROW, day: tab });
@@ -694,9 +705,9 @@ function productReportFor(
 export async function productReport(deps: ReportDeps, raw: string): Promise<ReportResult> {
   const args = parseProductArgs(raw);
   if (isArgsError(args)) return plain(args.message);
-  const all = monthDays(await deps.cuadre.listDays());
-  if (all.length === 0) return plain(NO_DAYS);
-  const days = selectDays(all, args.range);
+  const all = await deps.cuadre.listDays();
+  if (monthDays(all).length === 0) return plain(NO_DAYS);
+  const days = periodDays(all, args.range);
   if (isArgsError(days)) return plain(days.message);
 
   const sheets = await readSheets(deps.cuadre, days);
@@ -714,13 +725,11 @@ export async function completeProductRequest(
   product: string,
 ): Promise<ReportResult> {
   if (request.command === PRODUCT_COMMAND.ROW) {
-    const days = await deps.cuadre.listDays();
-    if (!days.some((day) => day.trim() === request.day)) {
-      return plain(`No existe la pestaña ${request.day} en el cuadre.`);
-    }
-    return rowReportFor(await deps.cuadre.readDay(request.day), product);
+    const tab = resolveDayTab(await deps.cuadre.listDays(), request.day)?.trim();
+    if (tab === undefined) return plain(`No existe la pestaña ${request.day} en el cuadre.`);
+    return rowReportFor(await deps.cuadre.readDay(tab), product);
   }
-  const days = selectDays(monthDays(await deps.cuadre.listDays()), request.range);
+  const days = periodDays(await deps.cuadre.listDays(), request.range);
   if (isArgsError(days)) return plain(days.message);
   return productReportFor(await readSheets(deps.cuadre, days), days, product);
 }

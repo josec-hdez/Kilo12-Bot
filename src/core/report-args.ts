@@ -1,4 +1,5 @@
 import { suggestMatches, type AliasIndex } from './mapping.js';
+import { resolveDayTab } from './months.js';
 import { TOP_METRIC, type TopMetric } from './reports.js';
 import { normalizeName } from './tabs.js';
 
@@ -70,12 +71,19 @@ export function parseDay(raw: string): string | null | ArgsError {
   return error('Día no válido. Usa el número de la pestaña, por ejemplo: 03.');
 }
 
-/** Días de un rango, en el orden de la hoja. `null` = todos. */
+/**
+ * Días de un rango, en el orden de la hoja. `null` = todos. Un día que no está en el
+ * mes en curso se busca en el anterior (`28` → `28/10`), así `/rango 28 03` cruza meses.
+ */
 export function selectDays(days: readonly string[], range: DayRange | null): string[] | ArgsError {
   if (range === null) return [...days];
   const clean = days.map((day) => day.trim());
-  const from = clean.indexOf(range.from);
-  const to = clean.indexOf(range.to);
+  const position = (wanted: string): number => {
+    const found = resolveDayTab(clean, wanted);
+    return found === null ? -1 : clean.indexOf(found);
+  };
+  const from = position(range.from);
+  const to = position(range.to);
   if (from < 0) return error(`No existe la pestaña ${range.from} en el cuadre.`);
   if (to < 0) return error(`No existe la pestaña ${range.to} en el cuadre.`);
   return from <= to ? days.slice(from, to + 1) : days.slice(to, from + 1);

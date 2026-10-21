@@ -52,6 +52,18 @@ const sumOf = (column: string): string =>
 export const TC_LABEL_CELL = 'P18';
 export const TC_VALUE_CELL = 'Q18';
 
+/** Celdas de valor del resumen P:Q de cada día. Las lee también la pestaña `Resumen`. */
+export const SUMMARY_CELL = {
+  INVERSION_INICIAL: 'Q2',
+  INVERSION_FINAL: 'Q3',
+  VENTA: 'Q4',
+  COSTO: 'Q5',
+  UTILIDAD_BRUTA: 'Q6',
+  GASTOS_TOTAL: 'Q13',
+  UTILIDAD_NETA: 'Q14',
+  TC: TC_VALUE_CELL,
+} as const;
+
 /**
  * Resumen P:Q. Igual al original salvo dos correcciones aprobadas:
  * Q14 = Utilidad Bruta − Gastos (el original restaba los gastos a la venta)
@@ -60,20 +72,20 @@ export const TC_VALUE_CELL = 'Q18';
 export function summaryCells(tc: number | null): SummaryCell[] {
   return [
     { address: 'P2', value: 'Inversion Inicial' },
-    { address: 'Q2', value: sumOf('C') },
+    { address: SUMMARY_CELL.INVERSION_INICIAL, value: sumOf('C') },
     { address: 'P3', value: 'Inversion Final' },
-    { address: 'Q3', value: sumOf('M') },
+    { address: SUMMARY_CELL.INVERSION_FINAL, value: sumOf('M') },
     { address: 'P4', value: 'Venta Total' },
-    { address: 'Q4', value: sumOf('K') },
+    { address: SUMMARY_CELL.VENTA, value: sumOf('K') },
     { address: 'P5', value: 'Costo Total' },
-    { address: 'Q5', value: sumOf('L') },
+    { address: SUMMARY_CELL.COSTO, value: sumOf('L') },
     { address: 'P6', value: 'Utilidad Bruta' },
-    { address: 'Q6', value: '=Q4-Q5' },
+    { address: SUMMARY_CELL.UTILIDAD_BRUTA, value: '=Q4-Q5' },
     { address: 'P8', value: 'Otros Gastos' },
     { address: 'P13', value: 'Total' },
-    { address: 'Q13', value: '=SUM(Q8:Q12)' },
+    { address: SUMMARY_CELL.GASTOS_TOTAL, value: '=SUM(Q8:Q12)' },
     { address: 'P14', value: 'Utilidad' },
-    { address: 'Q14', value: '=Q6-Q13' },
+    { address: SUMMARY_CELL.UTILIDAD_NETA, value: '=Q6-Q13' },
     { address: TC_LABEL_CELL, value: 'TC.' },
     { address: TC_VALUE_CELL, value: tc },
   ];

@@ -3,10 +3,12 @@ import { FakeSheetsGateway } from '../../src/adapters/sheets/fake-sheets-gateway
 import {
   CONFIG_TAB,
   configGrid,
+  ensureSummaryTab,
   ensureTemplate,
   syncConfigTab,
   TEMPLATE_TAB,
 } from '../../src/app/sheet-structure.js';
+import { SUMMARY_TAB } from '../../src/core/month-summary.js';
 import type { Product } from '../../src/ports/repositories.js';
 
 const product = (overrides: Partial<Product>): Product => ({
@@ -80,5 +82,23 @@ describe('syncConfigTab', () => {
     expect(sheets.cell(CONFIG_TAB, 'C3')).toBe(400);
     expect(sheets.cell(CONFIG_TAB, 'A4')).toBeUndefined();
     expect(await sheets.listTabs()).toHaveLength(1);
+  });
+});
+
+describe('ensureSummaryTab', () => {
+  it('crea Resumen visible con 31 días y totales, y no la toca si ya existe', async () => {
+    const sheets = new FakeSheetsGateway();
+    expect(await ensureSummaryTab(sheets)).toEqual({ created: true });
+    expect((await sheets.listTabs()).map((tab) => [tab.title, tab.hidden])).toEqual([
+      [SUMMARY_TAB, false],
+    ]);
+    expect(sheets.cell(SUMMARY_TAB, 'A2')).toBe(1);
+    expect(sheets.cell(SUMMARY_TAB, 'A32')).toBe(31);
+    expect(sheets.cell(SUMMARY_TAB, 'A33')).toBe('Total');
+
+    // Las dueñas agregaron una columna: la segunda llamada no reescribe nada.
+    await sheets.writeRanges([{ tab: SUMMARY_TAB, a1: 'K1', values: [['Notas']] }]);
+    expect(await ensureSummaryTab(sheets)).toEqual({ created: false });
+    expect(sheets.cell(SUMMARY_TAB, 'K1')).toBe('Notas');
   });
 });

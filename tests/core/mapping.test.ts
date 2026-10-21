@@ -4,6 +4,7 @@ import {
   MATCH_KIND,
   buildAliasIndex,
   resolveIpvProduct,
+  equivalenceCandidates,
   suggestMatches,
 } from '../../src/core/mapping.js';
 
@@ -91,5 +92,38 @@ describe('sugerencias por parecido', () => {
     const suggestions = suggestMatches('agua 500ml', CATALOG, { limit: 1 });
     expect(suggestions).toHaveLength(1);
     expect(suggestions[0]?.product).toBe('agua 500 ml');
+  });
+});
+
+describe('candidatos para una equivalencia', () => {
+  const CUADRE = [
+    'chupachupa',
+    'ketchup',
+    'azucar campofino',
+    'sal',
+    'salsa mantia',
+    'cigarro popular de bodega',
+    'pan pequeño',
+  ];
+
+  it.each([
+    ['chupa-chupa', 'chupachupa'],
+    ['chupa chupa', 'chupachupa'],
+    ['ketcup vima', 'ketchup'],
+    ['azucar', 'azucar campofino'],
+  ])('«%s» propone «%s» primero', (ipv, cuadre) => {
+    expect(equivalenceCandidates(ipv, CUADRE)[0]?.product).toBe(cuadre);
+  });
+
+  it('no propone nada si no se parece a ningún producto', () => {
+    expect(equivalenceCandidates('ron havana club', CUADRE)).toEqual([]);
+  });
+
+  it('una palabra corta no se toma por otra que solo empieza igual (sal ≠ salsa)', () => {
+    expect(equivalenceCandidates('sal', ['salsa mantia'])).toEqual([]);
+  });
+
+  it('suggestMatches (búsqueda de /producto) sigue siendo estricta', () => {
+    expect(suggestMatches('azucar', CUADRE)).toEqual([]);
   });
 });

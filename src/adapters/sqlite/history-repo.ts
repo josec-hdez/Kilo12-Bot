@@ -53,6 +53,7 @@ type SnapshotRow = typeof snapshots.$inferSelect;
 function isSnapshotPayload(value: unknown): value is SnapshotPayload {
   if (typeof value !== 'object' || value === null) return false;
   if (!('kind' in value) || !('tab' in value) || typeof value.tab !== 'string') return false;
+  if ('month' in value && typeof value.month !== 'string') return false;
   if (value.kind === SNAPSHOT_KIND.CREATE_TAB) return true;
   return value.kind === SNAPSHOT_KIND.CELLS && 'ranges' in value && Array.isArray(value.ranges);
 }
