@@ -15,6 +15,7 @@ import type { LoadIpvPayload } from './pending-payloads.js';
 import {
   PREPARE_STATUS,
   type Actor,
+  type AliasQuestion,
   type ExecutionResult,
   type PipelineDeps,
   type PrepareResult,
@@ -38,6 +39,8 @@ export interface LoadIpvRequest {
   month: MonthKey;
   /** TC del día si ya se conoce; si no, queda vacía y se fija con /tc. */
   tc: number | null;
+  /** Productos del IPV que la dueña ya marcó como nuevos: no se vuelven a preguntar. */
+  skipAliasQuestions?: readonly string[];
 }
 
 /**
@@ -47,7 +50,7 @@ export interface LoadIpvRequest {
 export async function prepareIpvLoad(
   deps: PipelineDeps,
   actor: Actor,
-  { ipv, tc, month }: LoadIpvRequest,
+  { ipv, tc, month, skipAliasQuestions = [] }: LoadIpvRequest,
 ): Promise<PrepareResult> {
   const book = deps.books.forMonth(month);
   if (book === null) return { status: PREPARE_STATUS.REJECTED, message: noBookMessage(month) };
@@ -96,6 +99,15 @@ export async function prepareIpvLoad(
   const closed = isMonthClosed(deps.settings, month) ? closedMonthBlocker(month) : null;
   const blocked = blockers.length > 0 || closed !== null;
   const canForce = blocked && can(actor.role, PERMISSION.FORCE_CONFIRM);
+  const skip = new Set(skipAliasQuestions);
+  const aliasQuestions: AliasQuestion[] = can(actor.role, PERMISSION.MANAGE_EQUIVALENCES)
+    ? draft.unmatched
+        .filter((item) => item.suggestions.length > 0 && !skip.has(item.ipvProduct))
+        .map((item) => ({
+          ipvProduct: item.ipvProduct,
+          candidates: item.suggestions.map((suggestion) => suggestion.product),
+        }))
+    : [];
 
   const draftPreview = loadIpvPreview({
     tab,
@@ -108,10 +120,11 @@ export async function prepareIpvLoad(
     blockers,
     showFinancials: can(actor.role, PERMISSION.VIEW_FINANCIALS),
     canForce,
+    askAliases: aliasQuestions.length > 0,
   });
   const preview = closed === null ? draftPreview : `${draftPreview}\n\n🔒 ${closed}.`;
 
-  if (blocked && !canForce) return { status: PREPARE_STATUS.BLOCKED, preview };
+  if (blocked && !canForce) return { status: PREPARE_STATUS.BLOCKED, preview, aliasQuestions };
 
   const payload: LoadIpvPayload = {
     tab,
@@ -137,6 +150,7 @@ export async function prepareIpvLoad(
     pendingId: action.id,
     preview,
     requiresForce: blocked,
+    aliasQuestions,
   };
 }
 
