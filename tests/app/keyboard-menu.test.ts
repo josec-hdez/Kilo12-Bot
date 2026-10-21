@@ -14,29 +14,34 @@ import { canRunCommand, ROLE, type Role } from '../../src/core/auth.js';
 const ROLES: Role[] = [ROLE.OWNER, ROLE.PARTNER, ROLE.CLERK];
 
 describe('teclado fijo por rol', () => {
-  it('la dueña ve los 17 botones en el orden aprobado, de 3 en 3', () => {
+  it('la dueña ve los 18 botones en el orden aprobado, de 3 en 3', () => {
     expect(keyboardRowsFor(ROLE.OWNER)).toEqual([
       ['📅 Hoy', '📆 Mes', '🗓 Semana'],
-      ['💰 Ganancia', '💸 Gastos', '📦 Inversión'],
+      ['💰 Ganancia', '📊 Gastos', '📦 Inversión'],
       ['🏆 Top', '📊 Margen', '🔍 Producto'],
       ['📄 Fila', '📍 Día', '↔️ Rango'],
       ['📥 IPV', '🔎 Validar', '💱 TC'],
-      ['↩️ Deshacer', '❓ Ayuda'],
+      ['➕ Gasto', '↩️ Deshacer', '❓ Ayuda'],
     ]);
   });
 
-  it('el socio ve reportes y validar, sin IPV, TC ni deshacer (no tiene esos permisos)', () => {
+  it('el socio ve reportes, validar y ➕ Gasto, sin IPV, TC ni deshacer (no tiene esos permisos)', () => {
     expect(keyboardRowsFor(ROLE.PARTNER)).toEqual([
       ['📅 Hoy', '📆 Mes', '🗓 Semana'],
-      ['💰 Ganancia', '💸 Gastos', '📦 Inversión'],
+      ['💰 Ganancia', '📊 Gastos', '📦 Inversión'],
       ['🏆 Top', '📊 Margen', '🔍 Producto'],
       ['📄 Fila', '📍 Día', '↔️ Rango'],
-      ['🔎 Validar', '❓ Ayuda'],
+      ['🔎 Validar', '➕ Gasto', '❓ Ayuda'],
     ]);
   });
 
   it('el dependiente solo ve lo que puede usar', () => {
-    expect(keyboardRowsFor(ROLE.CLERK)).toEqual([['📥 IPV', '❓ Ayuda']]);
+    expect(keyboardRowsFor(ROLE.CLERK)).toEqual([['📥 IPV', '➕ Gasto', '❓ Ayuda']]);
+  });
+
+  it('➕ Gasto registra (/gasto) y 📊 Gastos es el reporte (/gastos)', () => {
+    expect(buttonForText('➕ Gasto')?.command).toBe('gasto');
+    expect(buttonForText('📊 Gastos')?.command).toBe('gastos');
   });
 
   it('ningún rol ve un botón cuyo comando no puede ejecutar', () => {
@@ -83,7 +88,12 @@ describe('menú "/" por rol', () => {
   });
 
   it('el dependiente no ve reportes', () => {
-    expect(menuCommandsFor(ROLE.CLERK).map((c) => c.command)).toEqual(['ipv', 'ayuda', 'cancelar']);
+    expect(menuCommandsFor(ROLE.CLERK).map((c) => c.command)).toEqual([
+      'ipv',
+      'gasto',
+      'ayuda',
+      'cancelar',
+    ]);
   });
 
   it('nombres y descripciones válidos para Telegram', () => {

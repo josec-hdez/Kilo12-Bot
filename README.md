@@ -11,6 +11,7 @@ Las reglas de negocio (fórmulas, equivalencias IPV ↔ cuadre, validaciones) es
 | `/ipv`                  | Cargar el IPV: se envía o reenvía el `.xlsx` al bot. Si el archivo trae varias hojas, el bot pregunta cuál analizar (ver [Elegir la hoja del IPV](#elegir-la-hoja-del-ipv)). Muestra una vista previa y pide confirmación antes de crear la pestaña. |
 | `/validar [03\|semana]` | Revisa el cuadre y agrupa los hallazgos por severidad 🔴 (afecta la ganancia), 🟡 (inventario o inversión) y ⚪ (cosmético).                                                                                                                         |
 | `/tc 780 [03]`          | Fija la tasa de cambio del día (celda Q18), con confirmación.                                                                                                                                                                                        |
+| `/gasto`                | Registra un gasto en la hoja **Gastos** (historial), ver [Registrar un gasto](#registrar-un-gasto). No cambia el cuadre.                                                                                                                             |
 | `/deshacer`             | Revierte la última escritura en la hoja, con confirmación.                                                                                                                                                                                           |
 | `/ayuda`                | Lista de comandos según el rol.                                                                                                                                                                                                                      |
 | `/cancelar`             | Abandona una acción en curso (por ejemplo, cuando el bot espera el motivo de "⚠️ Confirmar igual").                                                                                                                                                  |
@@ -22,7 +23,7 @@ Las reglas de negocio (fórmulas, equivalencias IPV ↔ cuadre, validaciones) es
 | `/hoy`, `/dia [03]`                            | Venta, costo de lo vendido, utilidad bruta, margen, gastos y utilidad neta (CUP y USD con la TC del día), top 5 por venta y por utilidad, y cantidad de alertas.                      |
 | `/mes`, `/semana`, `/rango 02 04`              | Tabla por día (venta, costo, utilidad bruta, margen, gastos, utilidad neta), totales, promedio diario, margen promedio **simple** y **ponderado**, mejor y peor día.                  |
 | `/ganancia`                                    | Acumulado según las hojas y **ajustado** (rango estimado para la venta sin costo).                                                                                                    |
-| `/gastos [02 04]`                              | Gastos de "Otros Gastos" por día y por concepto.                                                                                                                                      |
+| `/gastos [02 04]`                              | Gastos de "Otros Gastos" del cuadre por día y por concepto (no lee la hoja Gastos de `/gasto`).                                                                                       |
 | `/inversion [02 04]`                           | Inversión inicial, compras, costo de lo vendido e inversión final por día, al costo.                                                                                                  |
 | `/top [5] [venta\|utilidad\|unidades] [02 04]` | Ranking de productos.                                                                                                                                                                 |
 | `/margen [02 04]`                              | Productos por margen; alerta los de alta rotación con margen menor al 15%.                                                                                                            |
@@ -36,8 +37,8 @@ Una venta sin costo cuenta como ganancia completa: los reportes la marcan como u
 | Rol           | Puede                                                                                         |
 | ------------- | --------------------------------------------------------------------------------------------- |
 | `dueno`       | Todo, incluido "⚠️ Confirmar igual" para forzar una carga bloqueada (con motivo obligatorio). |
-| `socio`       | `/validar` y los reportes. Gastos y sugerencias llegan en la siguiente entrega.               |
-| `dependiente` | `/ipv`. No ve costos ni utilidades.                                                           |
+| `socio`       | `/validar`, `/gasto` y los reportes. Las sugerencias llegan en la siguiente entrega.          |
+| `dependiente` | `/ipv` y `/gasto`. No ve costos ni utilidades.                                                |
 
 **Sin IA.** El bot no interpreta mensajes libres: cualquier texto que no sea un comando ni un botón recibe la ayuda y el teclado del rol.
 
@@ -65,20 +66,34 @@ Atajos:
 
 La pregunta es solo de quien envió el archivo, vence a los 15 minutos y se abandona con `/cancelar` o tocando otro botón del teclado.
 
+### Registrar un gasto
+
+`/gasto` (o el botón **➕ Gasto**) agrega una fila a la hoja de Google **Gastos**, con las columnas `Fecha | Cantidad | Moneda | Descripcion`. Es un **historial**: el bot no escribe en "Otros Gastos" del cuadre, que se sigue llenando a mano.
+
+1. **Fecha:** el bot propone la de hoy (zona `TZ`) con **[Hoy]** y **[Otro día]**. Con **Otro día**, o escribiéndola directamente, acepta `18/10`, `18/10/2026` o `2026-10-18` (día antes que mes). No acepta fechas futuras.
+2. **Cantidad:** un número mayor que 0 (`1500`, `1,500`, `12.5`).
+3. **Moneda:** **[CUP]** o **[USD]**, o se escribe.
+4. **Descripción:** texto libre, hasta 200 caracteres.
+5. **Vista previa** con **✅ Confirmar** / **❌ Cancelar**. Al confirmar se agrega la fila debajo de la última.
+
+La fecha se escribe como fecha de Sheets y la cantidad como número. Si la hoja no responde, el bot lo dice, no registra nada y deja tocar ✅ otra vez. `/deshacer` no revierte un gasto: se corrige o se borra a mano en la hoja.
+
 ### Teclado de botones y menú "/"
 
 Cada usuario ve, debajo de la barra de escritura, un **teclado fijo** con los comandos que su rol puede usar (reemplaza al teclado de letras; el ícono ⊞ de la barra alterna entre los dos). Se envía con `/start`, `/ayuda` y ante cualquier texto libre.
 
-Dueñas (el socio ve lo mismo sin 📥 IPV, 💱 TC ni ↩️ Deshacer, porque su rol no los permite; el dependiente ve solo 📥 IPV y ❓ Ayuda):
+Dueñas (el socio ve lo mismo sin 📥 IPV, 💱 TC ni ↩️ Deshacer, porque su rol no los permite; el dependiente ve solo 📥 IPV, ➕ Gasto y ❓ Ayuda):
 
 ```
 📅 Hoy      📆 Mes      🗓 Semana
-💰 Ganancia 💸 Gastos   📦 Inversión
+💰 Ganancia 📊 Gastos   📦 Inversión
 🏆 Top      📊 Margen   🔍 Producto
 📄 Fila     📍 Día      ↔️ Rango
 📥 IPV      🔎 Validar  💱 TC
-↩️ Deshacer ❓ Ayuda
+➕ Gasto    ↩️ Deshacer ❓ Ayuda
 ```
+
+**📊 Gastos** es el reporte del cuadre (`/gastos`); **➕ Gasto** registra uno nuevo en el historial (`/gasto`).
 
 Los botones que necesitan un dato lo preguntan:
 
@@ -90,6 +105,7 @@ Los botones que necesitan un dato lo preguntan:
 | 📄 Fila     | Nombre del producto y luego el día con botones → `/fila`.                     |
 | 🏆 Top      | Venta, Utilidad o Unidades → `/top`.                                          |
 | 💱 TC       | "¿Cuál es la TC de hoy?": se escribe el número → `/tc` con vista previa y ✅. |
+| ➕ Gasto    | Fecha, cantidad, moneda y descripción → vista previa y ✅ (`/gasto`).         |
 | 📥 IPV      | Pide el `.xlsx` y, si tiene varias hojas, cuál analizar.                      |
 
 Cada pregunta es solo de quien tocó el botón, vence a los 15 minutos y se abandona con `/cancelar` o tocando otro botón. Los comandos escritos (`/fila pollo 03`) siguen funcionando igual.
@@ -113,6 +129,7 @@ El botón **Menú** (y escribir `/`) muestra la lista de comandos **del rol de c
    ipv - Cargar el IPV del día
    validar - Revisar errores del cuadre
    tc - Fijar la tasa de cambio del día
+   gasto - Registrar un gasto en el historial
    deshacer - Revertir la última escritura
    hoy - Resumen de hoy
    dia - Resumen de un día
@@ -139,6 +156,7 @@ El botón **Menú** (y escribir `/`) muestra la lista de comandos **del rol de c
    - Si Google no deja crear la clave, la organización tiene activa la política `iam.disableServiceAccountKeyCreation` (activa por defecto en organizaciones creadas desde mayo de 2024). Con una cuenta personal de Gmail no ocurre.
 5. Copia el correo de la cuenta (campo `client_email` del JSON, termina en `iam.gserviceaccount.com`).
 6. Abre la hoja **Cuadre K12 Remoto** → **Compartir** → pega ese correo con permiso de **Editor**.
+7. Haz lo mismo con la hoja **Gastos** (historial de `/gasto`). Sin ese permiso, Google responde 403 y el bot avisa que no pudo registrar el gasto.
 
 **Carpeta de Drive del IPV:** próximamente. Hoy el IPV se envía al bot por Telegram.
 
@@ -150,19 +168,22 @@ Copia la plantilla y complétala:
 cp .env.example .env
 ```
 
-| Variable              | Obligatoria | Qué es                                                                                                                                                                             |
-| --------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `TELEGRAM_TOKEN`      | Sí          | Token de @BotFather.                                                                                                                                                               |
-| `OWNER_IDS`           | Sí          | IDs numéricos de Telegram de las dueñas, separados por coma (`111,222`). Se registran con rol `dueno` al arrancar.                                                                 |
-| `GOOGLE_SA_JSON`      | No\*        | JSON de la service account: la **ruta** al archivo `.json` o el JSON completo en **una sola línea**.                                                                               |
-| `CUADRE_SHEET_ID`     | No\*        | ID de la hoja de cuadre (ver abajo).                                                                                                                                               |
-| `CUADRE_SEED_PATH`    | No          | Ruta a un cuadre exportado en `.xlsx`. Si la base de datos está vacía, carga de ahí el catálogo y los costos (usa la última pestaña de días). Recomendado para el primer arranque. |
-| `DRIVE_IPV_FOLDER_ID` | No          | Carpeta de Drive del IPV. Todavía no se usa.                                                                                                                                       |
-| `ANTHROPIC_API_KEY`   | No          | No se usa: el MVP no tiene IA.                                                                                                                                                     |
-| `DB_PATH`             | No          | Ruta de la base SQLite. Por defecto `./data/kilo12.db` (en Docker, `/app/data/kilo12.db`).                                                                                         |
-| `TZ`                  | No          | Zona horaria. Por defecto `America/Havana`.                                                                                                                                        |
+| Variable                | Obligatoria | Qué es                                                                                                                                                                             |
+| ----------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `TELEGRAM_TOKEN`        | Sí          | Token de @BotFather.                                                                                                                                                               |
+| `OWNER_IDS`             | Sí          | IDs numéricos de Telegram de las dueñas, separados por coma (`111,222`). Se registran con rol `dueno` al arrancar.                                                                 |
+| `GOOGLE_SA_JSON`        | No\*        | JSON de la service account: la **ruta** al archivo `.json` o el JSON completo en **una sola línea**.                                                                               |
+| `CUADRE_SHEET_ID`       | No\*        | ID de la hoja de cuadre (ver abajo).                                                                                                                                               |
+| `GASTOS_SPREADSHEET_ID` | No\*\*      | ID de la hoja **Gastos**, donde `/gasto` agrega una fila por gasto. Se saca de la URL igual que el del cuadre.                                                                     |
+| `CUADRE_SEED_PATH`      | No          | Ruta a un cuadre exportado en `.xlsx`. Si la base de datos está vacía, carga de ahí el catálogo y los costos (usa la última pestaña de días). Recomendado para el primer arranque. |
+| `DRIVE_IPV_FOLDER_ID`   | No          | Carpeta de Drive del IPV. Todavía no se usa.                                                                                                                                       |
+| `ANTHROPIC_API_KEY`     | No          | No se usa: el MVP no tiene IA.                                                                                                                                                     |
+| `DB_PATH`               | No          | Ruta de la base SQLite. Por defecto `./data/kilo12.db` (en Docker, `/app/data/kilo12.db`).                                                                                         |
+| `TZ`                    | No          | Zona horaria. Por defecto `America/Havana`.                                                                                                                                        |
 
 \* **Sin `GOOGLE_SA_JSON` o sin `CUADRE_SHEET_ID` el bot arranca con una hoja simulada en memoria** y lo indica en el log. Sirve para probar, pero no escribe en Google Sheets y lo cargado se pierde al reiniciar.
+
+\*\* **Sin `GOOGLE_SA_JSON` o sin `GASTOS_SPREADSHEET_ID`, `/gasto` guarda los gastos en memoria** (se pierden al reiniciar) y el bot lo avisa en el log al arrancar.
 
 **ID de la hoja:** está en la URL, entre `/d/` y `/edit`:
 `https://docs.google.com/spreadsheets/d/`**`1AbC...xyz`**`/edit`
@@ -241,4 +262,4 @@ Después de agregar a alguien, esa persona debe enviar **`/start`** al bot: reci
 ## Pendiente
 
 - **Nombres de pestaña por mes.** Las pestañas diarias se llaman `01`, `02`… sin mes. Falta decidir entre un libro por mes o pestañas `DD-MM`. Mientras tanto, si la pestaña del día ya existe, el bot rechaza la carga y no sobrescribe nada.
-- **Siguiente entrega:** registrar gastos (`/gasto`), inventario y compras, sugerencias, vigilancia de la carpeta de Drive y tareas programadas (09:00 y 21:00).
+- **Siguiente entrega:** inventario y compras, sugerencias, vigilancia de la carpeta de Drive y tareas programadas (09:00 y 21:00).

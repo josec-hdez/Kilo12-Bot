@@ -32,6 +32,16 @@ describe('loadConfig', () => {
     expect(config.useFakeSheets).toBe(false);
   });
 
+  it('la hoja Gastos es real solo con service account y GASTOS_SPREADSHEET_ID', () => {
+    expect(loadConfig(BASE_ENV).useFakeExpenses).toBe(true);
+    expect(loadConfig({ ...BASE_ENV, GASTOS_SPREADSHEET_ID: 'g' }).useFakeExpenses).toBe(true);
+    const config = loadConfig({ ...BASE_ENV, GOOGLE_SA_JSON: '{}', GASTOS_SPREADSHEET_ID: 'g' });
+    expect(config.expensesSheetId).toBe('g');
+    expect(config.useFakeExpenses).toBe(false);
+    // El cuadre y los gastos se configuran por separado.
+    expect(config.useFakeSheets).toBe(true);
+  });
+
   it('lanza un error claro si falta el token', () => {
     expect(() => loadConfig({ OWNER_IDS: '1' })).toThrow(ConfigError);
     expect(() => loadConfig({ OWNER_IDS: '1' })).toThrow(/TELEGRAM_TOKEN/);
