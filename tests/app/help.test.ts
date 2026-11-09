@@ -1,11 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { commandsFor, helpText } from '../../src/app/help.js';
+import { commandsFor, helpText, monthPickerNote } from '../../src/app/help.js';
 import { todayDateIn, todayIn } from '../../src/app/today.js';
 import { ROLE } from '../../src/core/auth.js';
 
 describe('ayuda por rol', () => {
   const REPORTS = [
-    'hoy',
     'dia',
     'mes',
     'semana',
@@ -44,6 +43,29 @@ describe('ayuda por rol', () => {
   it('la ayuda explica los botones y /cancelar', () => {
     expect(helpText(ROLE.OWNER)).toContain('Los botones de abajo');
     expect(helpText(ROLE.OWNER)).toContain('/cancelar');
+  });
+  it('la ayuda explica qué comandos preguntan el mes y cuáles no', () => {
+    const owner = helpText(ROLE.OWNER);
+    expect(owner).toContain('📒 Antes de /validar, /tc, /dia, /mes');
+    expect(owner).toContain('🔒 = mes cerrado');
+    expect(owner).toContain(
+      'No preguntan el mes: /ipv con un archivo con fecha, /gasto, /deshacer, /cuadremes, /cierremes, /equivalencia.',
+    );
+    const partner = monthPickerNote(ROLE.PARTNER);
+    expect(partner).toContain('📒 Antes de /validar, /dia');
+    expect(partner).not.toContain('/tc');
+    expect(partner).toContain('No preguntan el mes: /gasto.');
+    expect(monthPickerNote(ROLE.CLERK)).toBeNull();
+  });
+  it('/tc sin inferir el mes por el día; /ipv sin fecha pregunta hoja, mes y día', () => {
+    const owner = helpText(ROLE.OWNER);
+    expect(owner).toContain('en un mes pasado escribe también el día, por ejemplo /tc 780 05');
+    expect(owner).toContain('780 05');
+    expect(owner).not.toContain('mes anterior');
+    expect(owner).toContain(
+      'Si la hoja no tiene fecha, pregunto la hoja, después el mes y después el día',
+    );
+    expect(owner).toContain('un archivo con fecha no pregunta el mes');
   });
   it('el dependiente solo carga el IPV y registra gastos', () => {
     expect(commandsFor(ROLE.CLERK).map((c) => c.command)).toEqual(['ipv', 'gasto', 'ayuda']);
