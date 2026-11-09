@@ -1,7 +1,9 @@
 import { InlineKeyboard, Keyboard } from 'grammy';
 import { keyboardRowsFor } from '../../app/keyboard-menu.js';
+import { monthOptionLabel, type MonthOption } from '../../app/month-pick.js';
 import type { Role } from '../../core/auth.js';
 import { EXPENSE_CURRENCIES } from '../../core/expense.js';
+import type { MonthKey } from '../../core/months.js';
 
 /** Prefijos del callback_data (máximo 64 bytes en Telegram). */
 export const CALLBACK = {
@@ -12,7 +14,12 @@ export const CALLBACK = {
   IPV_SHEET: 'ipvs',
   /** Botones del menú en línea de versiones anteriores (siguen en el historial del chat). */
   MENU: 'menu',
-  /** Flujos guiados del teclado: `gd:<DD>` (/dia), `gr1:<DD>` y `gr2:<DD>:<DD>` (/rango), `gf:<DD>` (/fila), `gt:<métrica>` (/top). */
+  /**
+   * Flujos guiados del teclado, con el mes elegido dentro (no guardan estado):
+   * `gd:<AAAA-MM>:<DD>` (/dia), `gr1:<AAAA-MM>:<DD>` y `gr2:<AAAA-MM>:<DD>:<DD>` (/rango),
+   * `gf:<AAAA-MM>:<DD>` (/fila), `gt:<AAAA-MM>:<métrica>` (/top). Los formatos viejos sin
+   * mes (`gd:03`) siguen en el historial del chat y se responden como vencidos.
+   */
   FLOW_DAY: 'gd',
   FLOW_FROM: 'gr1',
   FLOW_TO: 'gr2',
@@ -30,6 +37,8 @@ export const CALLBACK = {
   EQUIVALENCE: 'eq',
   /** Producto sin equivalencia en /ipv: `ia:<índice>` es ese candidato, `ia:new` es nuevo, `ia:end` deja de preguntar. */
   IPV_ALIAS: 'ia',
+  /** Selector de mes: `mp:<id>:<AAAA-MM>`; `<id>` es la pregunta guardada (comando, quién, meses ofrecidos). */
+  MONTH_PICK: 'mp',
 } as const;
 
 /** Respuestas a la pregunta de equivalencia de /ipv (lo que va después de `ia:`). */
@@ -80,6 +89,19 @@ export function replyKeyboard(role: Role): Keyboard {
   return Keyboard.from(keyboardRowsFor(role)).persistent().resized();
 }
 
+const MONTH_COLUMNS = 3;
+
+/** Un botón por mes ofrecido (🔒 si está cerrado): `mp:<id>:<AAAA-MM>`, 3 por fila. */
+export function monthButtons(pickId: string, options: readonly MonthOption[]): InlineKeyboard {
+  const keyboard = new InlineKeyboard();
+  options.forEach((option, index) => {
+    keyboard.text(monthOptionLabel(option), `${CALLBACK.MONTH_PICK}:${pickId}:${option.month}`);
+    const rowFull = index % MONTH_COLUMNS === MONTH_COLUMNS - 1;
+    if (rowFull && index < options.length - 1) keyboard.row();
+  });
+  return keyboard;
+}
+
 const DAY_COLUMNS = 5;
 
 /** Días del cuadre como botones: `<prefijo>:<DD>`. */
@@ -98,10 +120,16 @@ export const TOP_METRICS = [
   { label: 'Unidades', value: 'unidades' },
 ] as const;
 
-export function topMetricButtons(): InlineKeyboard {
+/** Prefijo de un botón de flujo guiado con su mes: `gd:2026-10`. */
+export function flowPrefix(flow: string, month: MonthKey): string {
+  return `${flow}:${month}`;
+}
+
+/** [Venta] [Utilidad] [Unidades] del mes elegido: `gt:<AAAA-MM>:<métrica>`. */
+export function topMetricButtons(month: MonthKey): InlineKeyboard {
   const keyboard = new InlineKeyboard();
   for (const metric of TOP_METRICS)
-    keyboard.text(metric.label, `${CALLBACK.FLOW_TOP}:${metric.value}`);
+    keyboard.text(metric.label, `${flowPrefix(CALLBACK.FLOW_TOP, month)}:${metric.value}`);
   return keyboard;
 }
 
