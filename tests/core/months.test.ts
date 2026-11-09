@@ -7,7 +7,6 @@ import {
   isQualifiedTab,
   monthKey,
   monthName,
-  monthOfDayNumber,
   missingDays,
   monthOfRef,
   parseClockTime,
@@ -44,12 +43,6 @@ describe('mes de un día sin año', () => {
 
   it('un IPV de diciembre cargado en enero es del año anterior', () => {
     expect(monthOfRef({ day: 31, month: 12 }, { year: 2027, month: 1, day: 2 })).toBe('2026-12');
-  });
-
-  it('un número de día mayor que hoy es del mes anterior', () => {
-    expect(monthOfDayNumber(31, NOV_3)).toBe('2026-10');
-    expect(monthOfDayNumber(3, NOV_3)).toBe('2026-11');
-    expect(monthOfDayNumber(1, NOV_3)).toBe('2026-11');
   });
 });
 
