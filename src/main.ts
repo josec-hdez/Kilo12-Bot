@@ -31,7 +31,6 @@ import { remindMissingBook } from './app/book-reminder.js';
 import { CachedCuadreReader } from './app/cached-cuadre-reader.js';
 import {
   ensureDefaultBook,
-  MonthTimelineReader,
   RegistryCuadreBooks,
   singleBook,
   type BookOpener,
@@ -42,7 +41,7 @@ import { openSeedFile } from './app/seed-file.js';
 import { minutesIn, todayDateIn } from './app/today.js';
 import { ConfigError, loadConfig, type Config } from './config.js';
 import { EQUIVALENCES } from './core/equivalences.js';
-import { monthName, monthOfDate } from './core/months.js';
+import { monthName } from './core/months.js';
 import type { CuadreBooks } from './ports/cuadre-books.js';
 import type { CuadreReader } from './ports/cuadre-source.js';
 import type { ExpenseLog } from './ports/expense-log.js';
@@ -99,8 +98,6 @@ function openBook(
 
 interface CuadreWiring {
   books: CuadreBooks;
-  /** Lectura de reportes y /validar: el mes en curso y, para cruzar meses, el anterior. */
-  cuadre: CuadreReader;
   admin: BookAdmin | undefined;
   /** Hay libros de Google: tiene sentido recordar el del mes siguiente. */
   real: boolean;
@@ -126,7 +123,6 @@ function wireCuadre(
     );
     return {
       books: singleBook(book.sheets, book.cuadre, cuadreSheetMonth),
-      cuadre: book.cuadre,
       admin: undefined,
       real: false,
     };
@@ -146,9 +142,6 @@ function wireCuadre(
   const email = readServiceAccount(json).client_email;
   return {
     books,
-    cuadre: new MonthTimelineReader(books, () =>
-      monthOfDate(todayDateIn(clock(), config.timezone)),
-    ),
     admin: {
       inspect: async (spreadsheetId) =>
         (await new GoogleSheetsGateway(client, spreadsheetId).listTabs()).map((tab) => tab.title),
@@ -236,7 +229,6 @@ async function main(): Promise<void> {
       },
       auth: { users, accessLog: new SqliteAccessLogRepository(db) },
       settings,
-      cuadre: wiring.cuadre,
       expenses: createExpenseLog(config),
       ...(wiring.admin === undefined ? {} : { books: wiring.admin }),
       timezone: config.timezone,
