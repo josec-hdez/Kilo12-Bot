@@ -1,4 +1,5 @@
 import { distance } from 'fastest-levenshtein';
+import { daysInMonth, monthName, parseMonthKey, type MonthKey } from '../core/months.js';
 import { normalizeName, parseIpvTabDate } from '../core/tabs.js';
 import type { DayRef } from '../core/types.js';
 
@@ -135,13 +136,24 @@ export function resolveCaptionSheet(sheets: readonly string[], caption: string):
 }
 
 /**
- * Día del cuadre al que va una hoja sin fecha en el nombre (`Hoja1`). Acepta `05`
- * (mes de hoy) o una fecha como `5 oct`.
+ * Día del cuadre al que va una hoja sin fecha en el nombre (`Hoja1`), dentro del mes
+ * ya elegido. Acepta `05` o una fecha de ese mismo mes (`5 oct` para octubre). Un día
+ * que no existe en el mes o una fecha de otro mes → `null`: nunca se cambia de libro.
  */
-export function parseDayAnswer(answer: string, today: DayRef): DayRef | null {
+export function parseDayAnswer(answer: string, month: MonthKey): DayRef | null {
   const arg = parseDayArg(answer);
-  if (arg === null || arg === undefined) return null;
-  return { day: arg.day, month: arg.month ?? today.month };
+  const parsed = parseMonthKey(month);
+  if (arg === null || arg === undefined || parsed === null) return null;
+  if (arg.month !== null && arg.month !== parsed.month) return null;
+  if (arg.day > daysInMonth(month)) return null;
+  return { day: arg.day, month: parsed.month };
+}
+
+/** ¿La respuesta es una fecha válida, pero de otro mes que el elegido? */
+export function isDayOfOtherMonth(answer: string, month: MonthKey): boolean {
+  const arg = parseDayArg(answer);
+  const parsed = parseMonthKey(month);
+  return arg !== null && arg !== undefined && arg.month !== null && arg.month !== parsed?.month;
 }
 
 function spacingNote(sheet: string): string {
@@ -181,5 +193,12 @@ export function notFoundText(answer: string, count: number): string {
   return `No hay una hoja «${answer.trim()}». Escribe el nombre exacto o su número (1–${String(count)}), o /cancelar.`;
 }
 
-export const ASK_SHEET_DAY =
-  '¿A qué día del cuadre corresponde? Escribe el día (ej. 05) o fecha (5 oct).';
+/** "¿Qué día de octubre 2026? Escribe el día (ej. 05)." */
+export function askSheetDay(month: MonthKey): string {
+  return `¿Qué día de ${monthName(month)}? Escribe el día (ej. 05).`;
+}
+
+/** Respuesta con una fecha de otro mes que el elegido. */
+export function dayOfOtherMonth(month: MonthKey): string {
+  return `Ese día no es de ${monthName(month)}. Escribe solo el día, o /cancelar.`;
+}
