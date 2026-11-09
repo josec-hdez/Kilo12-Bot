@@ -78,6 +78,10 @@ export class RegistryCuadreBooks implements CuadreBooks {
     }
     return { month, spreadsheetId, ...book };
   }
+
+  months(): MonthKey[] {
+    return Object.keys(readBookRegistry(this.settings)).sort();
+  }
 }
 
 /**
@@ -95,6 +99,8 @@ export function singleBook(
   return {
     defaultMonth,
     forMonth: (month) => ({ month, spreadsheetId: SINGLE_BOOK_ID, sheets, cuadre }),
+    // Un solo mes: el selector de mes siempre tiene algo que ofrecer.
+    months: () => [defaultMonth],
   };
 }
 
@@ -190,4 +196,13 @@ export class MonthTimelineReader implements CuadreReader {
       return sheet;
     });
   }
+}
+
+/**
+ * Lectura de un mes elegido: sus pestañas `DD` y, antes, las del mes anterior como
+ * `DD/MM`. Sale del mismo `CuadreBooks` que usan las escrituras, así lecturas y
+ * escrituras nunca apuntan a libros distintos.
+ */
+export function monthReader(books: CuadreBooks, month: MonthKey): CuadreReader {
+  return new MonthTimelineReader(books, () => month);
 }
