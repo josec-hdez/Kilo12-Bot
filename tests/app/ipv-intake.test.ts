@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  askSheetDay,
+  dayOfOtherMonth,
+  isDayOfOtherMonth,
   parseDayAnswer,
   parseDayArg,
   resolveCaptionSheet,
@@ -109,13 +112,30 @@ describe('resolveCaptionSheet', () => {
 });
 
 describe('parseDayAnswer', () => {
-  const today = { day: 3, month: 10 };
-  it('día solo → mes de hoy; fecha completa → esa fecha', () => {
-    expect(parseDayAnswer('05', today)).toEqual({ day: 5, month: 10 });
-    expect(parseDayAnswer('30 sep', today)).toEqual({ day: 30, month: 9 });
+  it('día solo → ese día del mes elegido; fecha del mismo mes → también', () => {
+    expect(parseDayAnswer('05', '2026-10')).toEqual({ day: 5, month: 10 });
+    expect(parseDayAnswer('5 oct', '2026-10')).toEqual({ day: 5, month: 10 });
+    expect(parseDayAnswer('31', '2026-10')).toEqual({ day: 31, month: 10 });
   });
-  it('lo que no es un día → null', () => {
-    expect(parseDayAnswer('mañana', today)).toBeNull();
-    expect(parseDayAnswer('', today)).toBeNull();
+  it('una fecha de otro mes, un día que el mes no tiene o lo que no es un día → null', () => {
+    expect(parseDayAnswer('5 nov', '2026-10')).toBeNull();
+    expect(parseDayAnswer('30 sep', '2026-10')).toBeNull();
+    expect(parseDayAnswer('32', '2026-10')).toBeNull();
+    expect(parseDayAnswer('31', '2026-11')).toBeNull();
+    expect(parseDayAnswer('29', '2026-02')).toBeNull();
+    expect(parseDayAnswer('mañana', '2026-10')).toBeNull();
+    expect(parseDayAnswer('', '2026-10')).toBeNull();
+  });
+  it('isDayOfOtherMonth distingue "otro mes" de "no es un día"', () => {
+    expect(isDayOfOtherMonth('5 nov', '2026-10')).toBe(true);
+    expect(isDayOfOtherMonth('5 oct', '2026-10')).toBe(false);
+    expect(isDayOfOtherMonth('05', '2026-10')).toBe(false);
+    expect(isDayOfOtherMonth('mañana', '2026-10')).toBe(false);
+  });
+  it('askSheetDay y dayOfOtherMonth nombran el mes', () => {
+    expect(askSheetDay('2026-10')).toBe('¿Qué día de octubre 2026? Escribe el día (ej. 05).');
+    expect(dayOfOtherMonth('2026-10')).toBe(
+      'Ese día no es de octubre 2026. Escribe solo el día, o /cancelar.',
+    );
   });
 });
