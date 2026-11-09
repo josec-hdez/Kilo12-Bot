@@ -74,15 +74,6 @@ export function monthOfRef(ref: DayRef, today: CalendarDate): MonthKey {
   return monthKey(year, ref.month);
 }
 
-/**
- * Mes de un día escrito solo con el número (`/tc 780 31`): este mes si el día ya
- * pasó o es hoy; si es mayor que hoy, el mes anterior (un día futuro no tiene cuadre).
- */
-export function monthOfDayNumber(day: number, today: CalendarDate): MonthKey {
-  const current = monthOfDate(today);
-  return day > today.day ? addMonths(current, -1) : current;
-}
-
 /** `2026-11` → `noviembre 2026`. */
 export function monthName(key: MonthKey): string {
   const parsed = parseMonthKey(key);
