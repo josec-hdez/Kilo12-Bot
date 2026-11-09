@@ -15,7 +15,6 @@ import {
   rangeReport,
   REPORT_KIND,
   rowReport,
-  todayReport,
   topReport,
   weekReport,
   type ReportDeps,
@@ -102,7 +101,7 @@ describe('período (cuadre real 01–05)', () => {
   });
 });
 
-describe('/dia y /hoy', () => {
+describe('/dia', () => {
   it('/dia 02: resumen, top 5, alertas y producto sin costo', async () => {
     const text = body(await dayReport(deps, '2'));
     expect(text).toContain('pestaña 02 · TC 775');
@@ -111,12 +110,6 @@ describe('/dia y /hoy', () => {
     expect(text).toContain('Top 5 por venta');
     expect(text).toMatch(/Alertas: 🔴 \d+ · 🟡 \d+ · ⚪ \d+/);
     expect(text).toContain('cigarro popular verde');
-  });
-
-  it('/hoy sin pestaña de hoy muestra el último día cargado', async () => {
-    const text = body(await todayReport(deps, '07'));
-    expect(text).toContain('Todavía no hay pestaña de hoy (07)');
-    expect(text).toContain('pestaña 05');
   });
 });
 
@@ -238,7 +231,6 @@ describe('ancho de las tablas (teléfono)', () => {
       ['/top 20 unidades', topReport(deps, '20 unidades')],
       ['/margen', marginsReport(deps, '')],
       ['/dia 03', dayReport(deps, '03')],
-      ['/hoy', todayReport(deps, '03')],
       ['/fila mantequilla soya 04', rowReport(deps, 'mantequilla soya 04')],
       ['/producto pollo', productReport(deps, 'pollo')],
       ['/producto arroz', productReport(deps, 'arroz')],

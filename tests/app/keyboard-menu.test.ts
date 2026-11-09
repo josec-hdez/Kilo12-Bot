@@ -14,25 +14,32 @@ import { canRunCommand, ROLE, type Role } from '../../src/core/auth.js';
 const ROLES: Role[] = [ROLE.OWNER, ROLE.PARTNER, ROLE.CLERK];
 
 describe('teclado fijo por rol', () => {
-  it('la dueña ve los 18 botones en el orden aprobado, de 3 en 3', () => {
+  it('la dueña ve los 17 botones en el orden aprobado, de 3 en 3', () => {
     expect(keyboardRowsFor(ROLE.OWNER)).toEqual([
-      ['📅 Hoy', '📆 Mes', '🗓 Semana'],
-      ['💰 Ganancia', '📊 Gastos', '📦 Inversión'],
-      ['🏆 Top', '📊 Margen', '🔍 Producto'],
-      ['📄 Fila', '📍 Día', '↔️ Rango'],
-      ['📥 IPV', '🔎 Validar', '💱 TC'],
-      ['➕ Gasto', '↩️ Deshacer', '❓ Ayuda'],
+      ['📆 Mes', '🗓 Semana', '💰 Ganancia'],
+      ['📊 Gastos', '📦 Inversión', '🏆 Top'],
+      ['📊 Margen', '🔍 Producto', '📄 Fila'],
+      ['📍 Día', '↔️ Rango', '📥 IPV'],
+      ['🔎 Validar', '💱 TC', '➕ Gasto'],
+      ['↩️ Deshacer', '❓ Ayuda'],
     ]);
   });
 
   it('el socio ve reportes, validar y ➕ Gasto, sin IPV, TC ni deshacer (no tiene esos permisos)', () => {
     expect(keyboardRowsFor(ROLE.PARTNER)).toEqual([
-      ['📅 Hoy', '📆 Mes', '🗓 Semana'],
-      ['💰 Ganancia', '📊 Gastos', '📦 Inversión'],
-      ['🏆 Top', '📊 Margen', '🔍 Producto'],
-      ['📄 Fila', '📍 Día', '↔️ Rango'],
-      ['🔎 Validar', '➕ Gasto', '❓ Ayuda'],
+      ['📆 Mes', '🗓 Semana', '💰 Ganancia'],
+      ['📊 Gastos', '📦 Inversión', '🏆 Top'],
+      ['📊 Margen', '🔍 Producto', '📄 Fila'],
+      ['📍 Día', '↔️ Rango', '🔎 Validar'],
+      ['➕ Gasto', '❓ Ayuda'],
     ]);
+  });
+
+  it('/hoy ya no existe: ni botón 📅 Hoy ni comando en el menú "/" de ningún rol', () => {
+    expect(buttonForText('📅 Hoy')).toBeUndefined();
+    expect(MENU_BUTTONS.map((b) => b.command)).not.toContain('hoy');
+    for (const role of ROLES)
+      expect(menuCommandsFor(role).map((c) => c.command)).not.toContain('hoy');
   });
 
   it('el dependiente solo ve lo que puede usar', () => {
