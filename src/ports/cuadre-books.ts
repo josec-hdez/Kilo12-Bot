@@ -19,6 +19,8 @@ export interface CuadreBook {
 export interface CuadreBooks {
   /** Libro del mes, o null si las dueñas todavía no lo registraron con /cuadremes. */
   forMonth(month: MonthKey): CuadreBook | null;
+  /** Meses con libro registrado, del más antiguo al más reciente. */
+  months(): MonthKey[];
   /** Mes del libro de `CUADRE_SHEET_ID`: las escrituras guardadas sin mes son de ahí. */
   readonly defaultMonth: MonthKey;
 }

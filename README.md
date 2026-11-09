@@ -10,7 +10,7 @@ Las reglas de negocio (fórmulas, equivalencias IPV ↔ cuadre, validaciones) es
 | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `/ipv`                           | Cargar el IPV: se envía o reenvía el `.xlsx` al bot. Si el archivo trae varias hojas, el bot pregunta cuál analizar (ver [Elegir la hoja del IPV](#elegir-la-hoja-del-ipv)). Muestra una vista previa y pide confirmación antes de crear la pestaña. |
 | `/validar [03\|semana]`          | Revisa el cuadre y agrupa los hallazgos por severidad 🔴 (afecta la ganancia), 🟡 (inventario o inversión) y ⚪ (cosmético).                                                                                                                         |
-| `/tc 780 [03]`                   | Fija la tasa de cambio del día (celda Q18), con confirmación.                                                                                                                                                                                        |
+| `/tc 780 [03]`                   | Fija la tasa de cambio (celda Q18) en el mes elegido, con confirmación. Sin día, la pestaña de hoy (solo en el mes en curso); en un mes pasado hay que escribir el día (`/tc 780 05`).                                                               |
 | `/gasto`                         | Registra un gasto en la hoja **Gastos** (historial), ver [Registrar un gasto](#registrar-un-gasto). No cambia el cuadre.                                                                                                                             |
 | `/deshacer`                      | Revierte la última escritura en la hoja, con confirmación.                                                                                                                                                                                           |
 | `/cuadremes [2026-11 enlace]`    | Dueñas: lista o registra el libro de cuadre de un mes (ver [Un libro de cuadre por mes](#un-libro-de-cuadre-por-mes)).                                                                                                                               |
@@ -22,7 +22,7 @@ Las reglas de negocio (fórmulas, equivalencias IPV ↔ cuadre, validaciones) es
 
 | Comando                                        | Qué hace                                                                                                                                                                              |
 | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/hoy`, `/dia [03]`                            | Venta, costo de lo vendido, utilidad bruta, margen, gastos y utilidad neta (CUP y USD con la TC del día), top 5 por venta y por utilidad, y cantidad de alertas.                      |
+| `/dia [03]`                                    | Venta, costo de lo vendido, utilidad bruta, margen, gastos y utilidad neta (CUP y USD con la TC del día), top 5 por venta y por utilidad, y cantidad de alertas.                      |
 | `/mes`, `/semana`, `/rango 02 04`              | Tabla por día (venta, costo, utilidad bruta, margen, gastos, utilidad neta), totales, promedio diario, margen promedio **simple** y **ponderado**, mejor y peor día.                  |
 | `/ganancia`                                    | Acumulado según las hojas y **ajustado** (rango estimado para la venta sin costo).                                                                                                    |
 | `/gastos [02 04]`                              | Gastos de "Otros Gastos" del cuadre por día y por concepto (no lee la hoja Gastos de `/gasto`).                                                                                       |
@@ -42,6 +42,17 @@ Una venta sin costo cuenta como ganancia completa: los reportes la marcan como u
 | `socio`       | `/validar`, `/gasto` y los reportes. Las sugerencias llegan en la siguiente entrega.          |
 | `dependiente` | `/ipv` y `/gasto`. No ve costos ni utilidades.                                                |
 
+### Elegir el mes
+
+Cada mes es un libro de cuadre (ver [Un libro de cuadre por mes](#un-libro-de-cuadre-por-mes)). Antes de `/validar`, `/tc` y de cada reporte (`/dia`, `/mes`, `/semana`, `/rango`, `/ganancia`, `/gastos`, `/inversion`, `/top`, `/margen`, `/fila`, `/producto`), escritos o con su botón, el bot pregunta **📒 ¿De qué mes?** con un botón por mes:
+
+- Solo aparecen los meses con libro registrado y al menos un día cargado, del más reciente al más antiguo (como mucho 12). Los cerrados con `/cierremes` llevan 🔒.
+- Se pregunta siempre, aunque haya un solo mes. El botón sirve una vez, solo para quien lo pidió, y vence a los 15 minutos.
+- La respuesta empieza con el mes elegido (`📒 octubre 2026`), y los días que se ofrecen (📍 Día, ↔️ Rango, 📄 Fila) son los de ese mes.
+- **No preguntan el mes:** `/gasto`, `/equivalencia`, `/cuadremes`, `/cierremes`, `/deshacer`, `/ayuda`, `/cancelar` ni `/ipv` con un archivo que trae la fecha (POS, hoja `3 oct` o pie del archivo): la fecha del archivo decide el mes.
+- **`/ipv` con una hoja sin fecha** (`Hoja1`): primero la hoja, después el mes y después el día (`05`). Ahí también aparece el mes en curso aunque todavía no tenga días, para poder cargar su `01`.
+- **`/tc`:** `/tc 780` en el mes en curso va a la pestaña de hoy; en un mes pasado el bot pide el día (`/tc 780 05`). Con el botón 💱 TC en un mes pasado se escriben juntos el número y el día: `780 05`.
+
 **Sin IA.** El bot no interpreta mensajes libres: cualquier texto que no sea un comando ni un botón recibe la ayuda y el teclado del rol.
 
 ### Formatos del IPV
@@ -58,7 +69,7 @@ El IPV hecho a mano suele traer muchas hojas. El bot **nunca adivina cuál carga
 1. Al recibir el `.xlsx`, responde con la lista numerada de **todas** las hojas, también las que no son días (`Hoja1`, `IPV Alf. 30 sep`). Los nombres con espacios en los bordes aparecen entre comillas con el aviso "(con espacio al final)".
 2. Se responde con el **número** de la lista o con el **nombre**. Mayúsculas, acentos y espacios de más no importan (`2 oct` encuentra `"2 oct "`).
 3. Si el nombre no coincide con ninguna hoja, el bot propone la más parecida (_"No hay una hoja «3 ocr». ¿Quisiste decir «3 oct»?"_) y solo la usa si se pulsa **Sí**. **No** vuelve a preguntar.
-4. Si la hoja no dice el día, ni en su nombre ni en el título del POS (`Hoja1`), pregunta a qué día del cuadre corresponde (`05` o `5 oct`).
+4. Si la hoja no dice el día, ni en su nombre ni en el título del POS (`Hoja1`), pregunta el mes con botones y después el día de ese mes (`05`). Ver [Elegir el mes](#elegir-el-mes).
 5. La vista previa muestra siempre la hoja elegida: _"📥 Hoja «3 oct» → pestaña 03 del cuadre"_.
 
 Atajos:
@@ -102,26 +113,28 @@ Cada usuario ve, debajo de la barra de escritura, un **teclado fijo** con los co
 Dueñas (el socio ve lo mismo sin 📥 IPV, 💱 TC ni ↩️ Deshacer, porque su rol no los permite; el dependiente ve solo 📥 IPV, ➕ Gasto y ❓ Ayuda):
 
 ```
-📅 Hoy      📆 Mes      🗓 Semana
-💰 Ganancia 📊 Gastos   📦 Inversión
-🏆 Top      📊 Margen   🔍 Producto
-📄 Fila     📍 Día      ↔️ Rango
-📥 IPV      🔎 Validar  💱 TC
-➕ Gasto    ↩️ Deshacer ❓ Ayuda
+📆 Mes      🗓 Semana   💰 Ganancia
+📊 Gastos   📦 Inversión 🏆 Top
+📊 Margen   🔍 Producto 📄 Fila
+📍 Día      ↔️ Rango    📥 IPV
+🔎 Validar  💱 TC       ➕ Gasto
+↩️ Deshacer ❓ Ayuda
 ```
 
 **📊 Gastos** es el reporte del cuadre (`/gastos`); **➕ Gasto** registra uno nuevo en el historial (`/gasto`).
 
-Los botones que necesitan un dato lo preguntan:
+`/hoy` ya no existe (el cuadre nunca está al día en tiempo real): el último día cargado se ve con **📍 Día**. Si un teclado viejo todavía muestra **📅 Hoy**, o se toca un botón `menu:hoy` del historial, el bot responde con `/ayuda` y el teclado nuevo; `/hoy` escrito es un comando desconocido.
+
+Los botones que necesitan un dato lo preguntan (antes, el mes: ver [Elegir el mes](#elegir-el-mes)):
 
 | Botón       | Qué pregunta                                                                  |
 | ----------- | ----------------------------------------------------------------------------- |
-| 📍 Día      | "¿Qué día?" con botones de los días del cuadre → `/dia`.                      |
+| 📍 Día      | "¿Qué día?" con botones de los días del mes elegido → `/dia`.                 |
 | ↔️ Rango    | "¿Desde?" y "¿Hasta?" (solo días posteriores) → `/rango`.                     |
 | 🔍 Producto | "¿Qué producto?": se escribe el nombre → `/producto`.                         |
 | 📄 Fila     | Nombre del producto y luego el día con botones → `/fila`.                     |
 | 🏆 Top      | Venta, Utilidad o Unidades → `/top`.                                          |
-| 💱 TC       | "¿Cuál es la TC de hoy?": se escribe el número → `/tc` con vista previa y ✅. |
+| 💱 TC       | Mes en curso: se escribe el número; mes pasado: número y día (`780 05`) → ✅. |
 | ➕ Gasto    | Fecha, cantidad, moneda y descripción → vista previa y ✅ (`/gasto`).         |
 | 📥 IPV      | Pide el `.xlsx` y, si tiene varias hojas, cuál analizar.                      |
 
@@ -148,7 +161,6 @@ El botón **Menú** (y escribir `/`) muestra la lista de comandos **del rol de c
    tc - Fijar la tasa de cambio del día
    gasto - Registrar un gasto en el historial
    deshacer - Revertir la última escritura
-   hoy - Resumen de hoy
    dia - Resumen de un día
    mes - Utilidad de cada día del mes y su suma
    semana - Resumen de los últimos 7 días
@@ -272,10 +284,10 @@ Cada mes tiene su propio libro de Google Sheets (`Cuadre K12 2026-11`), con una 
 
 **Lectura entre meses:**
 
-- `/mes` y los reportes sin rango (`/gastos`, `/top`, `/producto`…) usan el mes en curso.
-- `/semana`, `/rango` y los reportes con rango pueden empezar en el mes anterior: sus días aparecen como `DD/MM` (`28/10`). Si un día no existe en el mes en curso, se busca en el anterior (`/rango 28 03` el 3 de noviembre va del 28 de octubre al 3 de noviembre).
+- `/mes` y los reportes sin rango (`/gastos`, `/top`, `/producto`…) usan el mes elegido en el selector.
+- `/semana` (los últimos 7 días del mes elegido), `/rango` y los reportes con rango pueden empezar en el mes anterior al elegido: sus días aparecen como `DD/MM` (`28/10`). Si un día no existe en el mes elegido, se busca en el anterior (`/rango 28 03` con noviembre va del 28 de octubre al 3 de noviembre).
 - Al cargar el IPV, el último costo conocido se busca también en el libro del mes anterior, y `/validar` compara el cierre del último día del mes anterior con el inicio del 01.
-- `/tc 780 DD`: si el día es mayor que hoy, es del mes anterior (`/tc 780 31` el 1 de noviembre va al 31 de octubre).
+- `/tc 780 DD` escribe siempre en el día `DD` del mes elegido; el día ya no decide el mes (para el 31 de octubre: `/tc 780 31` y elegir octubre).
 
 **Pestaña `Resumen`:** cada libro tiene una pestaña `Resumen` con una fila por día (01–31): venta, costo, utilidad bruta, % margen, otros gastos, utilidad neta, TC, venta en USD e inversión final, más una fila de totales (el margen sale de los totales, no del promedio; la inversión final es la del último día cargado). Cada celda lee su día con `INDIRECT`, así que un día que todavía no existe o que se borró con `/deshacer` queda en blanco en lugar de `#REF!`. El bot la crea al registrar el libro con `/cuadremes` o en la primera carga del mes si falta; si ya existe no la toca, así que se le pueden agregar columnas a la derecha o formato. Como siempre tiene 31 filas, viaja intacta en la copia del libro del mes siguiente.
 
@@ -298,9 +310,9 @@ La revisión empieza con un resumen (utilidad neta, venta, margen, inventario fi
 1. **Cargar el IPV:** reenviar el `.xlsx` al bot y, si tiene varias hojas, decir cuál analizar. Revisar la vista previa: hoja elegida, venta, utilidad bruta, productos sin costo y alertas. El costo de cada producto es el último que tiene en las pestañas anteriores del cuadre (los que se escriben a mano cuentan desde la carga siguiente); el catálogo del bot solo se usa si el cuadre nunca tuvo ese costo.
    - La venta del cuadre debe ser igual al `IMPORTE TOTAL` del IPV. Solo en el IPV hecho a mano se acepta una diferencia: exactamente la merma y el consumo valorados a precio (aviso 🟡). En el del POS cualquier diferencia bloquea.
    - Si hay bloqueos 🔴 (por ejemplo, `CANT. FINAL` vacía con existencia), no aparece ✅. Una dueña puede usar **⚠️ Confirmar igual** y escribir el motivo, que queda registrado.
-2. **Fijar la TC:** `/tc 780`.
+2. **Fijar la TC:** `/tc 780` y elegir el mes en curso (para otro día: `/tc 780 05`).
 3. **Revisar:** `/validar` o `/validar semana`.
-4. **Ver cómo va:** `/hoy`, `/mes`, `/ganancia`.
+4. **Ver cómo va:** 📍 Día (o `/dia`, el último día cargado), `/mes`, `/ganancia`: cada uno pregunta primero el mes.
 5. **Corregir un error:** `/deshacer` borra la pestaña recién creada o restaura la TC anterior.
 
 ## Seguridad

@@ -72,7 +72,6 @@ export const COMMAND_PERMISSION: Readonly<Record<string, Permission | null>> = {
   deshacer: PERMISSION.UNDO,
   cerrar: PERMISSION.SET_TC,
   // Reportes: todos muestran costos o utilidades, así que exigen ver finanzas.
-  hoy: PERMISSION.VIEW_FINANCIALS,
   dia: PERMISSION.VIEW_FINANCIALS,
   semana: PERMISSION.VIEW_FINANCIALS,
   mes: PERMISSION.VIEW_FINANCIALS,

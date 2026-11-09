@@ -8,6 +8,7 @@ import {
   BOOKS_SETTING,
   ensureDefaultBook,
   MonthTimelineReader,
+  monthReader,
   previousBook,
   readBookRegistry,
   registerBook,
@@ -129,6 +130,23 @@ describe('registro de libros', () => {
     expect(opened).toBe(1);
   });
 
+  it('months() lista los meses registrados en orden y descarta entradas dañadas', () => {
+    registerBook(settings, '2026-11', NOV_ID);
+    registerBook(settings, '2026-10', OCT_ID);
+    const books = booksFor({});
+    expect(books.months()).toEqual(['2026-10', '2026-11']);
+
+    settings.set(BOOKS_SETTING, { '2026-11': NOV_ID, nov: 'x', '2026-12': 5 });
+    expect(books.months()).toEqual(['2026-11']);
+  });
+
+  it('con un solo libro, months() es solo su mes', () => {
+    expect(singleBook(new FakeSheetsGateway(), new MemoryReader([])).months()).toEqual(['2026-10']);
+    expect(singleBook(new FakeSheetsGateway(), new MemoryReader([]), '2026-11').months()).toEqual([
+      '2026-11',
+    ]);
+  });
+
   it('con un solo libro no hay "mes anterior"', () => {
     const books = singleBook(new FakeSheetsGateway(), new MemoryReader([]));
     const current = books.forMonth('2026-11');
@@ -198,6 +216,33 @@ describe('lectura que cruza meses', () => {
     expect(body(await monthReport({ ...deps, cuadre: onlyOctober }))).toContain(
       'todavía no tiene pestañas',
     );
+  });
+
+  it('monthReader lee el mes elegido aunque hoy sea otro', async () => {
+    const books = booksFor({
+      [OCT_ID]: new MemoryReader(october),
+      [NOV_ID]: new MemoryReader(november),
+    });
+    expect(await monthReader(books, '2026-10').listDays()).toEqual(['01', '02', '03', '04', '05']);
+    expect(await monthReader(books, '2026-11').listDays()).toEqual([
+      '01/10',
+      '02/10',
+      '03/10',
+      '04/10',
+      '05/10',
+      '01',
+      '02',
+    ]);
+    const [sheet] = await monthReader(books, '2026-10').readDays(['04']);
+    expect(sheet?.rows).toEqual(october[3]?.rows);
+  });
+
+  it('monthReader con un solo libro ve las pestañas de ese libro', async () => {
+    const reader = monthReader(
+      singleBook(new FakeSheetsGateway(), new MemoryReader(october)),
+      '2026-11',
+    );
+    expect(await reader.listDays()).toEqual(['01', '02', '03', '04', '05']);
   });
 
   it('con un solo libro para los dos meses no duplica días', async () => {

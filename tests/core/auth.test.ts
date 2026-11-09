@@ -70,7 +70,7 @@ describe('permisos por comando', () => {
   });
 
   it('los reportes exigen ver finanzas: dueña y socio sí, dependiente no', () => {
-    const reports = ['hoy', 'dia', 'semana', 'mes', 'rango', 'gastos', 'inversion', 'ganancia'];
+    const reports = ['dia', 'semana', 'mes', 'rango', 'gastos', 'inversion', 'ganancia'];
     for (const command of [...reports, 'top', 'margen', 'fila', 'producto']) {
       expect(commandPermission(command)).toBe(PERMISSION.VIEW_FINANCIALS);
       expect(canRunCommand(ROLE.OWNER, command)).toBe(true);

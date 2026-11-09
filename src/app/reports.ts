@@ -38,7 +38,7 @@ import type { CuadreReader } from '../ports/cuadre-source.js';
 import { ALIGN, compact, cup, esc, packMessages, pct, qty, table, usd } from './report-format.js';
 
 /**
- * Reportes del cuadre para Telegram (/mes, /semana, /rango, /dia, /hoy, /gastos,
+ * Reportes del cuadre para Telegram (/mes, /semana, /rango, /dia, /gastos,
  * /inversion, /ganancia, /top, /margen, /fila, /producto). Leen la hoja con el
  * CuadreReader y recalculan todo con core/reports. El texto es HTML.
  */
@@ -320,25 +320,6 @@ export async function dayReport(deps: ReportDeps, raw: string): Promise<ReportRe
   if (days.length === 0) return plain(NO_DAYS);
   const tab = arg ?? days[days.length - 1]?.trim() ?? '';
   return dayReportFor(deps, days, tab, arg === null ? 'Último día' : 'Día');
-}
-
-/** /hoy: la pestaña de hoy; si todavía no existe, el último día cargado. */
-export async function todayReport(deps: ReportDeps, todayTab: string): Promise<ReportResult> {
-  const days = await deps.cuadre.listDays();
-  if (days.length === 0) return plain(NO_DAYS);
-  if (days.some((day) => day.trim() === todayTab)) {
-    return dayReportFor(deps, days, todayTab, 'Hoy');
-  }
-  const last = days[days.length - 1]?.trim() ?? '';
-  const report = await dayReportFor(deps, days, last, 'Último día cargado');
-  if (report.kind !== REPORT_KIND.TEXT) return report;
-  return {
-    kind: REPORT_KIND.TEXT,
-    messages: [
-      esc(`Todavía no hay pestaña de hoy (${todayTab}); muestro el último día cargado.`),
-      ...report.messages,
-    ],
-  };
 }
 
 // ---------------------------------------------------------------- gastos e inversión

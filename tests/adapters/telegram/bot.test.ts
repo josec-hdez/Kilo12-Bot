@@ -18,6 +18,7 @@ import {
 import {
   BOT_TEXT,
   createBot,
+  parseTcArgs,
   parseTcValue,
   rowDayPrompt,
   splitMessage,
@@ -27,11 +28,14 @@ import { readBookRegistry, singleBook } from '../../../src/app/cuadre-books.js';
 import { FREE_TEXT_REPLY } from '../../../src/app/help.js';
 import { keyboardRowsFor, menuCommandsFor } from '../../../src/app/keyboard-menu.js';
 import { MAX_TABLE_WIDTH, preLines } from '../../../src/app/report-format.js';
-import { isMonthClosed } from '../../../src/app/closed-months.js';
+import { isMonthClosed, markMonthClosed } from '../../../src/app/closed-months.js';
+import { MONTH_PICK_TEXT } from '../../../src/app/month-pick.js';
 import { initialCuadreSeed, seedAll } from '../../../src/app/seed.js';
 import { ROLE } from '../../../src/core/auth.js';
 import { EQUIVALENCES } from '../../../src/core/equivalences.js';
+import type { CuadreBooks } from '../../../src/ports/cuadre-books.js';
 import type { CuadreReader } from '../../../src/ports/cuadre-source.js';
+import type { UserRepository } from '../../../src/ports/repositories.js';
 import { RENDER } from '../../../src/ports/sheets-gateway.js';
 
 const fixture = (name: string) => fileURLToPath(new URL(`../../fixtures/${name}`, import.meta.url));
@@ -63,6 +67,8 @@ interface SentMessage {
   parseMode: string | undefined;
   /** callback_data de los botones, si el mensaje los trae. */
   buttons: string[];
+  /** Texto de esos mismos botones. */
+  labels: string[];
   /** Teclado fijo (reply keyboard), si el mensaje lo trae. */
   keys: string[][];
   persistent: boolean;
@@ -98,6 +104,10 @@ let settingsRepo: SqliteSettingsRepository;
 let catalogRepo: SqliteCatalogRepository;
 /** Pestañas de las hojas que /cuadremes puede abrir (ID → pestañas). */
 let bookTabs: Record<string, string[]>;
+let usersRepo: UserRepository;
+/** El cuadre del fixture, con el error simulado de `cuadreError`. */
+let guardedCuadre: CuadreReader;
+let makeBot: (books?: CuadreBooks) => Promise<void>;
 
 function keysOf(payload: Record<string, unknown>): { keys: string[][]; persistent: boolean } {
   const markup = payload.reply_markup as
@@ -108,12 +118,18 @@ function keysOf(payload: Record<string, unknown>): { keys: string[][]; persisten
   return { keys, persistent: markup?.is_persistent === true };
 }
 
+type InlineButtons = { inline_keyboard?: { text: string; callback_data?: string }[][] } | undefined;
+
 function buttonsOf(payload: Record<string, unknown>): string[] {
-  const markup = payload.reply_markup as
-    { inline_keyboard?: { callback_data?: string }[][] } | undefined;
+  const markup = payload.reply_markup as InlineButtons;
   return (markup?.inline_keyboard ?? [])
     .flat()
     .flatMap((b) => (b.callback_data ? [b.callback_data] : []));
+}
+
+function labelsOf(payload: Record<string, unknown>): string[] {
+  const markup = payload.reply_markup as InlineButtons;
+  return (markup?.inline_keyboard ?? []).flat().map((b) => b.text);
 }
 
 beforeEach(async () => {
@@ -123,6 +139,7 @@ beforeEach(async () => {
   const db = openDatabase(':memory:');
   const catalog = new SqliteCatalogRepository(db);
   const users = new SqliteUserRepository(db);
+  usersRepo = users;
   const settings = new SqliteSettingsRepository(db);
   settingsRepo = settings;
   catalogRepo = catalog;
@@ -151,104 +168,109 @@ beforeEach(async () => {
     cuadreError === null ? read() : Promise.reject(cuadreError);
   updateId = 1;
 
-  const guardedCuadre: CuadreReader = {
+  guardedCuadre = {
     listDays: () => guard(() => reader.listDays()),
     readDay: (tab) => guard(() => reader.readDay(tab)),
     readDays: (tabs) => guard(() => reader.readDays(tabs)),
   };
 
-  bot = createBot(
-    {
-      pipeline: {
-        books: singleBook(sheets, guardedCuadre),
+  // Arma el bot sobre `books` (por defecto, un solo libro: el fixture de octubre).
+  makeBot = async (books = singleBook(sheets, guardedCuadre)) => {
+    bot = createBot(
+      {
+        pipeline: {
+          books,
+          settings,
+          catalog,
+          pending: new SqlitePendingActionRepository(db, clock),
+          changeLog,
+          snapshots: new SqliteSnapshotRepository(db, clock),
+          clock,
+        },
+        auth: { users, accessLog },
         settings,
-        catalog,
-        pending: new SqlitePendingActionRepository(db, clock),
-        changeLog,
-        snapshots: new SqliteSnapshotRepository(db, clock),
-        clock,
-      },
-      auth: { users, accessLog },
-      settings,
-      cuadre: guardedCuadre,
-      expenses: {
-        append: (expense) =>
-          expensesError === null ? expenses.append(expense) : Promise.reject(expensesError),
-      },
-      books: {
-        inspect: (id) => {
-          const found = bookTabs[id];
-          return found === undefined
-            ? Promise.reject(new Error('The caller does not have permission'))
-            : Promise.resolve(found);
+        expenses: {
+          append: (expense) =>
+            expensesError === null ? expenses.append(expense) : Promise.reject(expensesError),
         },
-        serviceAccountEmail: 'kilo12bot@test.iam.gserviceaccount.com',
+        books: {
+          inspect: (id) => {
+            const found = bookTabs[id];
+            return found === undefined
+              ? Promise.reject(new Error('The caller does not have permission'))
+              : Promise.resolve(found);
+          },
+          serviceAccountEmail: 'kilo12bot@test.iam.gserviceaccount.com',
+        },
+        timezone: 'America/Havana',
+        downloadFile: () => Promise.resolve(ipvBuffer),
       },
-      timezone: 'America/Havana',
-      downloadFile: () => Promise.resolve(ipvBuffer),
-    },
-    {
-      token: '123:TEST',
-      botInfo: {
-        id: 1,
-        is_bot: true,
-        first_name: 'Kilo 12',
-        username: 'kilo12_bot',
-        can_join_groups: false,
-        can_read_all_group_messages: false,
-        supports_inline_queries: false,
-        can_connect_to_business: false,
-        has_main_web_app: false,
-        has_topics_enabled: false,
-        allows_users_to_create_topics: false,
-        can_manage_bots: false,
-        supports_join_request_queries: false,
+      {
+        token: '123:TEST',
+        botInfo: {
+          id: 1,
+          is_bot: true,
+          first_name: 'Kilo 12',
+          username: 'kilo12_bot',
+          can_join_groups: false,
+          can_read_all_group_messages: false,
+          supports_inline_queries: false,
+          can_connect_to_business: false,
+          has_main_web_app: false,
+          has_topics_enabled: false,
+          allows_users_to_create_topics: false,
+          can_manage_bots: false,
+          supports_join_request_queries: false,
+        },
       },
-    },
-  );
+    );
 
-  // Ninguna llamada sale a Telegram: se registran y se responde algo plausible.
-  bot.api.config.use((_prev, method, payload) => {
-    const body = payload as Record<string, unknown>;
-    if (method === 'sendMessage') {
-      sent.push({
-        chatId: body.chat_id as number,
-        text: body.text as string,
-        parseMode: body.parse_mode as string | undefined,
-        buttons: buttonsOf(body),
-        ...keysOf(body),
-      });
-      return Promise.resolve({
-        ok: true,
-        result: {
-          message_id: sent.length,
-          date: 0,
-          chat: { id: body.chat_id, type: 'private' },
-          text: body.text,
-        },
-      } as never);
-    }
-    // El reporte reemplaza el mensaje "⏳ Calculando…": se refleja en `sent`.
-    if (method === 'editMessageText') {
-      const target = sent[(body.message_id as number) - 1];
-      if (target !== undefined) {
-        target.text = body.text as string;
-        target.parseMode = body.parse_mode as string | undefined;
-        target.buttons = buttonsOf(body);
+    // Ninguna llamada sale a Telegram: se registran y se responde algo plausible.
+    bot.api.config.use((_prev, method, payload) => {
+      const body = payload as Record<string, unknown>;
+      if (method === 'sendMessage') {
+        sent.push({
+          chatId: body.chat_id as number,
+          text: body.text as string,
+          parseMode: body.parse_mode as string | undefined,
+          buttons: buttonsOf(body),
+          labels: labelsOf(body),
+          ...keysOf(body),
+        });
+        return Promise.resolve({
+          ok: true,
+          result: {
+            message_id: sent.length,
+            date: 0,
+            chat: { id: body.chat_id, type: 'private' },
+            text: body.text,
+          },
+        } as never);
       }
-      edited.push(body.message_id as number);
-    }
-    if (method === 'sendChatAction') chatActions.push(body.action as string);
-    if (method === 'setMyCommands')
-      menuCalls.push({
-        commands: body.commands as { command: string }[],
-        scope: body.scope as MenuCall['scope'],
-      });
-    if (method === 'answerCallbackQuery') answers.push({ text: body.text as string | undefined });
-    if (method === 'editMessageReplyMarkup') edits++;
-    return Promise.resolve({ ok: true, result: true } as never);
-  });
-  await bot.init();
+      // El reporte reemplaza el mensaje "⏳ Calculando…": se refleja en `sent`.
+      if (method === 'editMessageText') {
+        const target = sent[(body.message_id as number) - 1];
+        if (target !== undefined) {
+          target.text = body.text as string;
+          target.parseMode = body.parse_mode as string | undefined;
+          target.buttons = buttonsOf(body);
+          target.labels = labelsOf(body);
+        }
+        edited.push(body.message_id as number);
+      }
+      if (method === 'sendChatAction') chatActions.push(body.action as string);
+      if (method === 'setMyCommands')
+        menuCalls.push({
+          commands: body.commands as { command: string }[],
+          scope: body.scope as MenuCall['scope'],
+        });
+      if (method === 'answerCallbackQuery') answers.push({ text: body.text as string | undefined });
+      if (method === 'editMessageReplyMarkup') edits++;
+      return Promise.resolve({ ok: true, result: true } as never);
+    });
+    await bot.init();
+  };
+  await makeBot();
 });
 
 const from = (id: number) => ({ id, is_bot: false, first_name: `u${String(id)}` });
@@ -316,6 +338,26 @@ const button = (prefix: string, message: SentMessage = last()): string => {
   if (data === undefined) throw new Error(`no hay botón ${prefix} en: ${JSON.stringify(message)}`);
   return data;
 };
+/** El último selector "📒 ¿De qué mes?" enviado. */
+const monthPicker = (): SentMessage => {
+  const message = sent.findLast((m) => m.buttons.some((b) => b.startsWith('mp:')));
+  if (message === undefined) throw new Error('el bot no preguntó el mes');
+  return message;
+};
+/** callback_data del mes en el último selector. */
+const monthButton = (month = '2026-10'): string => {
+  const data = monthPicker().buttons.find((b) => b.endsWith(`:${month}`));
+  if (data === undefined) throw new Error(`el selector no ofrece ${month}`);
+  return data;
+};
+/** Toca un mes del último selector. */
+async function pickMonth(userId: number, month = '2026-10'): Promise<void> {
+  await click(userId, monthButton(month));
+}
+
+/** Todos los botones de selector de mes enviados. */
+const mpButtons = () => sent.flatMap((m) => m.buttons).filter((b) => b.startsWith('mp:'));
+
 /** Última vista previa de /ipv: después pueden venir las preguntas de equivalencia. */
 const preview = (): SentMessage => {
   const message = sent.findLast((m) => m.text.startsWith('📥 Hoja'));
@@ -448,16 +490,67 @@ describe('/ipv', () => {
     expect(last().text).toContain('Venta: 90,356 CUP');
   });
 
-  it('hoja sin fecha en el nombre: pregunta a qué día del cuadre corresponde', async () => {
+  it('hoja sin fecha en el nombre: pregunta el mes y después el día de ese mes', async () => {
     await document(OWNER);
     await text(OWNER, 'IPV Alf. 30 sep');
+    expect(last().text).toBe('Hoja «IPV Alf. 30 sep». 📒 ¿De qué mes?');
+    expect(last().labels).toEqual(['octubre 2026']);
+    await text(OWNER, '30');
+    expect(last().text).toBe(BOT_TEXT.CHOOSE_MONTH_ABOVE);
+    await pickMonth(OWNER);
     expect(last().text).toBe(
-      'Hoja «IPV Alf. 30 sep». ¿A qué día del cuadre corresponde? Escribe el día (ej. 05) o fecha (5 oct).',
+      'Hoja «IPV Alf. 30 sep». ¿Qué día de octubre 2026? Escribe el día (ej. 05).',
     );
     await text(OWNER, 'mañana');
     expect(last().text).toBe(BOT_TEXT.SHEET_DAY_INVALID);
     await text(OWNER, '30 sep');
+    expect(last().text).toBe('Ese día no es de octubre 2026. Escribe solo el día, o /cancelar.');
+    await text(OWNER, '30');
     expect(preview().text).toContain('Hoja «IPV Alf. 30 sep» → pestaña 30');
+  });
+
+  it('hoja sin fecha: /cancelar en el paso del mes suelta la hoja y el toque posterior vence', async () => {
+    await document(OWNER);
+    await text(OWNER, 'IPV Alf. 30 sep');
+    const data = monthButton();
+    await text(OWNER, '/cancelar');
+    expect(last().text).toBe(BOT_TEXT.FLOW_CANCELLED);
+    await click(OWNER, data);
+    expect(last().text).toBe(BOT_TEXT.UPLOAD_EXPIRED);
+    await text(OWNER, '30');
+    expect(last().text).toBe(FREE_TEXT_REPLY);
+  });
+
+  it('hoja sin fecha: el dependiente elige mes y día y ve la vista previa', async () => {
+    await document(CLERK);
+    await text(CLERK, 'IPV Alf. 30 sep');
+    await pickMonth(CLERK);
+    await text(CLERK, '30');
+    expect(preview().text).toContain('Hoja «IPV Alf. 30 sep» → pestaña 30');
+    expect(accessLog.list()).toEqual([]);
+  });
+
+  it('hoja sin fecha: el socio no puede tocar el selector de la dueña', async () => {
+    await document(OWNER);
+    await text(OWNER, 'IPV Alf. 30 sep');
+    await click(PARTNER, monthButton());
+    expect(answers.at(-1)?.text).toContain('Tu rol no permite');
+    expect(accessLog.list()).toMatchObject([
+      { telegramId: PARTNER, command: '/ipv', outcome: 'forbidden' },
+    ]);
+    // La dueña sigue con su hoja.
+    await pickMonth(OWNER);
+    expect(last().text).toContain('¿Qué día de octubre 2026?');
+  });
+
+  it('IPV con fecha (POS, pie "3oct", nombre de la hoja) nunca pregunta el mes', async () => {
+    await document(OWNER, '3oct');
+    await document(OWNER, '2 oct');
+    await document(OWNER);
+    await text(OWNER, '6');
+    ipvBuffer = posBuffer;
+    await document(OWNER, undefined, 'IPV 2026-10-14.xlsx');
+    expect(mpButtons()).toEqual([]);
   });
 
   it('el pie con el nombre de la hoja se salta la pregunta', async () => {
@@ -585,7 +678,9 @@ describe('/tc y /deshacer', () => {
     await click(OWNER, button('ok'));
 
     await text(OWNER, '/tc 780');
-    expect(last().text).toContain('TC de la pestaña 03: vacía → 780');
+    expect(last().text).toBe('📒 /tc: ¿de qué mes?');
+    await pickMonth(OWNER);
+    expect(last().text).toContain('📒 octubre 2026\n💱 TC de la pestaña 03: vacía → 780');
     await click(OWNER, button('ok'));
     expect(last().text).toBe('✅ TC de 03: 780.');
     const [[tcCells = []] = []] = await sheets.readRanges(
@@ -605,10 +700,14 @@ describe('/tc y /deshacer', () => {
     expect(await tabs()).not.toContain('03');
   });
 
-  it('/tc con pestaña explícita y valores mal escritos', async () => {
-    await text(OWNER, '/tc abc');
-    expect(last().text).toBe(BOT_TEXT.TC_USAGE);
+  it('/tc con pestaña explícita y valores mal escritos (estos nunca preguntan el mes)', async () => {
+    for (const bad of ['/tc', '/tc abc', '/tc 780 x', '/tc 780 123', '/tc -5 03']) {
+      await text(OWNER, bad);
+      expect(last().text).toBe(BOT_TEXT.TC_USAGE);
+    }
+    expect(mpButtons()).toEqual([]);
     await text(OWNER, '/tc 780 09');
+    await pickMonth(OWNER);
     expect(last().text).toContain('No existe la pestaña 09');
   });
 
@@ -621,6 +720,9 @@ describe('/tc y /deshacer', () => {
 describe('/validar, /ayuda y texto libre', () => {
   it('/validar 02 muestra los hallazgos por severidad', async () => {
     await text(OWNER, '/validar 02');
+    expect(last().text).toBe('📒 /validar: ¿de qué mes?');
+    await pickMonth(OWNER);
+    expect(last().text.startsWith('📒 octubre 2026\n')).toBe(true);
     const all = sent.map((m) => m.text).join('\n');
     expect(all).toContain('🔎 Validación del cuadre: 02');
     expect(all).toContain('🔴 Afecta la ganancia');
@@ -640,11 +742,14 @@ describe('/validar, /ayuda y texto libre', () => {
     expect(last().text).toBe(FREE_TEXT_REPLY);
     expect(last().keys).toEqual(keyboardRowsFor(ROLE.PARTNER));
     await text(PARTNER, '🔎 Validar');
+    expect(last().text).toBe('📒 ¿De qué mes?');
+    await pickMonth(PARTNER);
     expect(last().text).toContain('🔎 Validación del cuadre: 05');
   });
 
   it('los botones en línea del menú anterior siguen funcionando', async () => {
     await click(PARTNER, 'menu:validar');
+    await pickMonth(PARTNER);
     expect(last().text).toContain('🔎 Validación del cuadre: 05');
   });
 
@@ -652,6 +757,41 @@ describe('/validar, /ayuda y texto libre', () => {
     await click(CLERK, 'menu:validar');
     expect(answers[answers.length - 1]?.text).toContain('Tu rol no permite');
     expect(accessLog.list()).toMatchObject([{ telegramId: CLERK, command: '/validar' }]);
+  });
+
+  it('/hoy ya no existe: comando desconocido para cualquier rol, sin rechazo en el log', async () => {
+    for (const user of [OWNER, PARTNER, CLERK]) {
+      await text(user, '/hoy');
+      expect(last().text).toBe(BOT_TEXT.UNKNOWN_COMMAND);
+    }
+    expect(accessLog.list()).toEqual([]);
+  });
+
+  it('el botón en línea viejo menu:hoy muestra /ayuda con el teclado nuevo', async () => {
+    await click(PARTNER, 'menu:hoy');
+    expect(last().text).toContain('/validar');
+    expect(last().keys).toEqual(keyboardRowsFor(ROLE.PARTNER));
+    expect(last().keys.flat()).not.toContain('📅 Hoy');
+    expect(accessLog.list()).toEqual([]);
+  });
+
+  it('el texto 📅 Hoy de un teclado viejo muestra /ayuda aunque haya una pregunta abierta', async () => {
+    await text(OWNER, '💱 TC');
+    await pickMonth(OWNER);
+    expect(last().text).toBe(BOT_TEXT.ASK_TC_VALUE);
+    await text(OWNER, '📅 Hoy');
+    expect(last().text).not.toBe(BOT_TEXT.TC_NOT_NUMBER);
+    expect(last().keys).toEqual(keyboardRowsFor(ROLE.OWNER));
+    expect(last().keys.flat()).not.toContain('📅 Hoy');
+    // La ayuda no cancela la pregunta: el número sigue yendo a /tc (aquí falta la pestaña 03).
+    await text(OWNER, '780');
+    expect(last().text).toContain('No existe la pestaña 03');
+  });
+
+  it('el texto 📅 Hoy del dependiente también es /ayuda (no "Tu rol no permite")', async () => {
+    await text(CLERK, '📅 Hoy');
+    expect(last().keys).toEqual([['📥 IPV', '➕ Gasto', '❓ Ayuda']]);
+    expect(accessLog.list()).toEqual([]);
   });
 
   it('comando que todavía no existe', async () => {
@@ -665,8 +805,10 @@ describe('/validar, /ayuda y texto libre', () => {
 describe('reportes', () => {
   it('/mes: tabla en HTML con <pre> y la suma de la utilidad', async () => {
     await text(OWNER, '/mes');
+    await pickMonth(OWNER);
     const message = last();
     expect(message.parseMode).toBe('HTML');
+    expect(message.text.startsWith('📒 <b>octubre 2026</b>\n')).toBe(true);
     expect(message.text).toContain('<pre>');
     expect(message.text).toMatch(/Total\s+528\.5k\s+181\.2k\s+34\.3%/);
     expect(message.text).toContain('Utilidad neta: <b>181,229 CUP</b>');
@@ -679,7 +821,10 @@ describe('reportes', () => {
   it('feedback: "⏳ Calculando…" al instante, "escribiendo…" y el reporte reemplaza ese mensaje', async () => {
     await text(OWNER, '/mes');
     expect(sent).toHaveLength(1);
-    expect(edited).toEqual([1]);
+    await pickMonth(OWNER);
+    // 1 = selector de mes, 2 = "⏳ Calculando…" que el reporte reemplaza.
+    expect(sent).toHaveLength(2);
+    expect(edited).toEqual([2]);
     expect(chatActions).toContain('typing');
     expect(last().text).toContain('<b>Mes</b>');
     expect(last().text).not.toContain('Calculando');
@@ -687,14 +832,21 @@ describe('reportes', () => {
 
   it('si el reporte falla, el mensaje "⏳ Calculando…" muestra el error', async () => {
     cuadreError = new Error('Google Sheets no responde');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     await text(OWNER, '/mes');
-    expect(sent).toHaveLength(1);
-    expect(edited).toEqual([1]);
+    // Aunque no se puedan listar las pestañas, el mes se ofrece: el error sale en el reporte.
+    await pickMonth(OWNER);
+    warn.mockRestore();
+    error.mockRestore();
+    expect(sent).toHaveLength(2);
+    expect(edited).toEqual([2]);
     expect(last().text).toContain('No pude generar el reporte: Google Sheets no responde');
   });
 
   it('el socio ve reportes; el dependiente recibe "No autorizado para reportes"', async () => {
     await text(PARTNER, '/ganancia');
+    await pickMonth(PARTNER);
     expect(last().text).toContain('Ganancia acumulada');
     await text(CLERK, '/mes');
     expect(last().text).toContain('No autorizado para reportes');
@@ -708,23 +860,21 @@ describe('reportes', () => {
 
   it('/fila y /dia con argumentos', async () => {
     await text(OWNER, '/fila mantequilla soya 04');
+    await pickMonth(OWNER);
     expect(last().text).toContain('La hoja guarda otro valor en C60');
     await text(OWNER, '/dia 02');
+    await pickMonth(OWNER);
     expect(last().text).toContain('pestaña 02 · TC 775');
     await text(OWNER, '/rango');
+    await pickMonth(OWNER);
     expect(last().text).toContain('Uso: /rango');
-  });
-
-  it('/hoy usa la pestaña del día en La Habana (o el último día cargado)', async () => {
-    await text(OWNER, '/hoy');
-    const all = sent.map((m) => m.text).join('\n');
-    // El reloj de la prueba es el 3 oct en La Habana y existe la pestaña 03.
-    expect(all).toContain('<b>Hoy</b> · pestaña 03');
   });
 
   it('nombre ambiguo: botones para elegir; solo quien preguntó puede elegir', async () => {
     await text(OWNER, '/producto mayonesa');
+    await pickMonth(OWNER);
     expect(last().text).toContain('coincide con varios productos');
+    expect(last().text.startsWith('📒 <b>octubre 2026</b>\n')).toBe(true);
     const choice = button('prod');
     await click(PARTNER, choice);
     expect(last().text).toBe(BOT_TEXT.CHOICE_EXPIRED);
@@ -735,12 +885,15 @@ describe('reportes', () => {
 
   it('el dependiente no puede usar un botón de producto', async () => {
     await text(OWNER, '/producto mayonesa');
+    await pickMonth(OWNER);
     await click(CLERK, button('prod'));
     expect(answers[answers.length - 1]?.text).toContain('No autorizado para reportes');
   });
 
   it('botón del menú: 📅 Mes', async () => {
     await click(OWNER, 'menu:mes');
+    expect(last().text).toBe('📒 /mes: ¿de qué mes?');
+    await pickMonth(OWNER);
     expect(last().text).toContain('<b>Mes</b>');
   });
 });
@@ -762,6 +915,8 @@ describe('teclado fijo y flujos guiados', () => {
 
   it('un botón sin argumentos ejecuta su comando (📆 Mes)', async () => {
     await text(OWNER, '📆 Mes');
+    expect(last().text).toBe('📒 ¿De qué mes?');
+    await pickMonth(OWNER);
     expect(last().text).toContain('<b>Mes</b>');
   });
 
@@ -778,26 +933,42 @@ describe('teclado fijo y flujos guiados', () => {
     ]);
   });
 
-  it('📍 Día: pregunta el día con botones y muestra /dia', async () => {
+  it('📍 Día: mes → días de ese mes con botones → /dia', async () => {
     await text(OWNER, '📍 Día');
+    expect(last().text).toBe(MONTH_PICK_TEXT.ASK);
+    await pickMonth(OWNER);
     expect(last().text).toBe(BOT_TEXT.ASK_DAY);
-    expect(last().buttons).toEqual(['gd:01', 'gd:02', 'gd:03', 'gd:04', 'gd:05']);
-    await click(OWNER, 'gd:02');
+    expect(last().buttons).toEqual([
+      'gd:2026-10:01',
+      'gd:2026-10:02',
+      'gd:2026-10:03',
+      'gd:2026-10:04',
+      'gd:2026-10:05',
+    ]);
+    await click(OWNER, 'gd:2026-10:02');
     expect(last().text).toContain('pestaña 02 · TC 775');
+    expect(last().text.startsWith('📒 <b>octubre 2026</b>\n')).toBe(true);
   });
 
-  it('↔️ Rango: desde → hasta (solo días posteriores) → /rango', async () => {
+  it('↔️ Rango: mes → desde → hasta (solo días posteriores) → /rango', async () => {
     await text(OWNER, '↔️ Rango');
+    await pickMonth(OWNER);
     expect(last().text).toBe(BOT_TEXT.ASK_FROM);
-    await click(OWNER, 'gr1:02');
+    await click(OWNER, 'gr1:2026-10:02');
     expect(last().text).toBe(BOT_TEXT.ASK_TO);
-    expect(last().buttons).toEqual(['gr2:02:02', 'gr2:02:03', 'gr2:02:04', 'gr2:02:05']);
-    await click(OWNER, 'gr2:02:03');
+    expect(last().buttons).toEqual([
+      'gr2:2026-10:02:02',
+      'gr2:2026-10:02:03',
+      'gr2:2026-10:02:04',
+      'gr2:2026-10:02:05',
+    ]);
+    await click(OWNER, 'gr2:2026-10:02:03');
     expect(last().text).toContain('Venta: <b>191,076 CUP</b>');
   });
 
-  it('🔍 Producto: pregunta el nombre y responde con /producto', async () => {
+  it('🔍 Producto: mes → pregunta el nombre y responde con /producto', async () => {
     await text(OWNER, '🔍 Producto');
+    await pickMonth(OWNER);
     expect(last().text).toBe(BOT_TEXT.ASK_PRODUCT);
     await text(OWNER, 'arroz');
     expect(last().text).toContain('Vendió: <b>6</b> unidades · venta <b>5,760 CUP</b>');
@@ -806,38 +977,58 @@ describe('teclado fijo y flujos guiados', () => {
     expect(last().text).toBe(FREE_TEXT_REPLY);
   });
 
-  it('📄 Fila: producto → día → /fila', async () => {
+  it('📄 Fila: mes → producto → día → /fila', async () => {
     await text(OWNER, '📄 Fila');
+    await pickMonth(OWNER);
     expect(last().text).toBe(BOT_TEXT.ASK_ROW_PRODUCT);
     await text(OWNER, 'arroz');
     expect(last().text).toBe(rowDayPrompt('arroz'));
-    expect(last().buttons).toEqual(['gf:01', 'gf:02', 'gf:03', 'gf:04', 'gf:05']);
+    expect(last().buttons).toEqual([
+      'gf:2026-10:01',
+      'gf:2026-10:02',
+      'gf:2026-10:03',
+      'gf:2026-10:04',
+      'gf:2026-10:05',
+    ]);
     await text(OWNER, 'hola');
     expect(last().text).toBe(BOT_TEXT.CHOOSE_DAY_ABOVE);
-    await click(OWNER, 'gf:02');
+    await click(OWNER, 'gf:2026-10:02');
     expect(last().text).toContain('pestaña 02');
     expect(last().text).toContain('K · Venta Bruta: <b>1,900</b>');
   });
 
   it('📄 Fila: otro usuario no puede usar el día de una pregunta ajena', async () => {
     await text(OWNER, '📄 Fila');
+    await pickMonth(OWNER);
     await text(OWNER, 'arroz');
-    await click(PARTNER, 'gf:02');
+    await click(PARTNER, 'gf:2026-10:02');
     expect(last().text).toBe(BOT_TEXT.FLOW_EXPIRED);
+    // La pregunta sigue siendo de la dueña.
+    await click(OWNER, 'gf:2026-10:02');
+    expect(last().text).toContain('K · Venta Bruta: <b>1,900</b>');
   });
 
-  it('🏆 Top: elige la métrica con botones', async () => {
+  it('🏆 Top: primero el mes, después la métrica', async () => {
     await text(OWNER, '🏆 Top');
+    expect(last().text).toBe(MONTH_PICK_TEXT.ASK);
+    await pickMonth(OWNER);
     expect(last().text).toBe(BOT_TEXT.ASK_TOP);
-    expect(last().buttons).toEqual(['gt:venta', 'gt:utilidad', 'gt:unidades']);
-    await click(OWNER, 'gt:utilidad');
+    expect(last().buttons).toEqual([
+      'gt:2026-10:venta',
+      'gt:2026-10:utilidad',
+      'gt:2026-10:unidades',
+    ]);
+    await click(OWNER, 'gt:2026-10:utilidad');
     expect(last().text).toContain('por utilidad');
+    expect(last().text.startsWith('📒 <b>octubre 2026</b>\n')).toBe(true);
   });
 
   it('💱 TC: pide el número, insiste si no lo es y prepara /tc con confirmación', async () => {
     await document(OWNER, '3oct');
     await click(OWNER, button('ok'));
     await text(OWNER, '💱 TC');
+    expect(last().text).toBe(MONTH_PICK_TEXT.ASK);
+    await pickMonth(OWNER);
     expect(last().text).toBe(BOT_TEXT.ASK_TC_VALUE);
     await text(OWNER, 'setecientos');
     expect(last().text).toBe(BOT_TEXT.TC_NOT_NUMBER);
@@ -853,6 +1044,7 @@ describe('teclado fijo y flujos guiados', () => {
 
   it('/cancelar abandona la pregunta en curso', async () => {
     await text(OWNER, '🔍 Producto');
+    await pickMonth(OWNER);
     await text(OWNER, '/cancelar');
     expect(last().text).toBe(BOT_TEXT.FLOW_CANCELLED);
     await text(OWNER, 'arroz');
@@ -863,17 +1055,785 @@ describe('teclado fijo y flujos guiados', () => {
 
   it('tocar otro botón reemplaza la pregunta en curso', async () => {
     await text(OWNER, '💱 TC');
+    await pickMonth(OWNER);
     await text(OWNER, '📆 Mes');
-    expect(last().text).toContain('<b>Mes</b>');
     await text(OWNER, '780');
     expect(last().text).toBe(FREE_TEXT_REPLY);
+    await pickMonth(OWNER);
+    expect(last().text).toContain('<b>Mes</b>');
   });
 
   it('la pregunta vence a los 15 minutos', async () => {
     await text(OWNER, '🔍 Producto');
+    await pickMonth(OWNER);
     now = new Date(now.getTime() + 16 * 60 * 1000);
     await text(OWNER, 'arroz');
     expect(last().text).toBe(FREE_TEXT_REPLY);
+  });
+});
+
+/** Lector del fixture que solo muestra `tabs` (todas si es null) y cuenta las lecturas. */
+interface CountingReader extends CuadreReader {
+  reads: number;
+}
+
+function countingReader(tabs: readonly string[] | null): CountingReader {
+  const counting: CountingReader = {
+    reads: 0,
+    listDays: async () => {
+      const all = await guardedCuadre.listDays();
+      return tabs === null ? all : all.filter((tab) => tabs.includes(tab.trim()));
+    },
+    readDay: (tab) => {
+      counting.reads++;
+      return guardedCuadre.readDay(tab);
+    },
+    readDays: (names) => {
+      counting.reads++;
+      return guardedCuadre.readDays(names);
+    },
+  };
+  return counting;
+}
+
+/**
+ * Un libro por mes (los registrados son las claves). `gateways` da a cada mes su propia
+ * hoja de escritura; sin ella, todos escriben en `sheets`.
+ */
+function booksOf(
+  byMonth: Record<string, CuadreReader>,
+  gateways: Record<string, FakeSheetsGateway> = {},
+): CuadreBooks {
+  return {
+    defaultMonth: '2026-10',
+    forMonth: (month) => {
+      const cuadre = byMonth[month];
+      if (cuadre === undefined) return null;
+      return { month, spreadsheetId: `id-${month}`, sheets: gateways[month] ?? sheets, cuadre };
+    },
+    months: () => Object.keys(byMonth).sort(),
+  };
+}
+
+describe('selector de mes', () => {
+  it('se ofrece siempre, aunque haya un solo mes', async () => {
+    await text(OWNER, '/mes');
+    expect(last().text).toBe('📒 /mes: ¿de qué mes?');
+    expect(last().buttons).toEqual([expect.stringMatching(/^mp:[A-Za-z0-9_-]{8}:2026-10$/)]);
+    expect(last().labels).toEqual(['octubre 2026']);
+    expect(edited).toEqual([]);
+  });
+
+  it('el toque quita los botones y el reporte trae el mes como encabezado', async () => {
+    await text(OWNER, '/semana');
+    await pickMonth(OWNER);
+    expect(edits).toBe(1);
+    expect(last().text.startsWith('📒 <b>octubre 2026</b>\n')).toBe(true);
+  });
+
+  it('con varios libros: más reciente primero, oculta el mes sin días y lee el libro elegido', async () => {
+    now = new Date('2026-11-09T15:00:00Z');
+    const october = countingReader(null);
+    const november = countingReader(['01']);
+    const december = countingReader([]);
+    await makeBot(booksOf({ '2026-10': october, '2026-11': november, '2026-12': december }));
+
+    await text(OWNER, '/mes');
+    expect(last().labels).toEqual(['noviembre 2026', 'octubre 2026']);
+    expect(last().buttons.map((b) => b.slice(-7))).toEqual(['2026-11', '2026-10']);
+
+    await pickMonth(OWNER, '2026-10');
+    expect(last().text.startsWith('📒 <b>octubre 2026</b>\n')).toBe(true);
+    expect(last().text).toMatch(/Total\s+528\.5k\s+181\.2k\s+34\.3%/);
+    expect(october.reads).toBeGreaterThan(0);
+    expect(november.reads).toBe(0);
+    expect(december.reads).toBe(0);
+
+    october.reads = 0;
+    await text(OWNER, '/mes');
+    await pickMonth(OWNER, '2026-11');
+    expect(last().text.startsWith('📒 <b>noviembre 2026</b>\n')).toBe(true);
+    expect(last().text).not.toMatch(/Total\s+528\.5k/);
+    expect(november.reads).toBeGreaterThan(0);
+  });
+
+  it('los meses cerrados llevan 🔒 y se pueden consultar', async () => {
+    now = new Date('2026-11-09T15:00:00Z');
+    await makeBot(booksOf({ '2026-10': countingReader(null), '2026-11': countingReader(['01']) }));
+    markMonthClosed(settingsRepo, '2026-10');
+    await text(PARTNER, '/ganancia');
+    expect(last().labels).toEqual(['noviembre 2026', '🔒 octubre 2026']);
+    await pickMonth(PARTNER, '2026-10');
+    expect(last().text).toContain('Ganancia acumulada');
+  });
+
+  it('sin meses con días: lo dice y no muestra botones', async () => {
+    await makeBot(booksOf({ '2026-10': countingReader([]) }));
+    await text(OWNER, '/mes');
+    expect(last().text).toBe(MONTH_PICK_TEXT.NO_MONTHS);
+    expect(last().buttons).toEqual([]);
+  });
+
+  it('los argumentos escritos se conservan hasta elegir el mes', async () => {
+    await text(OWNER, '/dia 02');
+    expect(last().text).not.toContain('pestaña 02');
+    await pickMonth(OWNER);
+    expect(last().text).toContain('pestaña 02 · TC 775');
+  });
+
+  it('dos selectores abiertos a la vez: cada uno corre su comando', async () => {
+    await text(OWNER, '/mes');
+    const mes = monthButton();
+    await text(OWNER, '/ganancia');
+    const ganancia = monthButton();
+    await click(OWNER, mes);
+    expect(last().text).toContain('<b>Mes</b>');
+    await click(OWNER, ganancia);
+    expect(last().text).toContain('Ganancia acumulada');
+  });
+
+  it('no preguntan el mes: /gasto, /equivalencia, /cuadremes, /cierremes, /deshacer, /ayuda, /cancelar, /ipv', async () => {
+    for (const command of [
+      '/gasto',
+      '/cancelar',
+      '/equivalencia',
+      '/cuadremes',
+      '/cierremes 2026-10',
+      '/deshacer',
+      '/ayuda',
+      '/cancelar',
+      '/ipv',
+    ])
+      await text(OWNER, command);
+    await text(OWNER, '↩️ Deshacer');
+    await text(OWNER, '❓ Ayuda');
+    expect(mpButtons()).toEqual([]);
+  });
+});
+
+describe('selector de mes: permisos', () => {
+  const report = (m: SentMessage) => m.text.includes('<b>Mes</b>');
+  const validation = (m: SentMessage) => m.text.includes('🔎 Validación del cuadre');
+  const lastAnswer = () => answers.at(-1)?.text;
+
+  it('/mes: la dueña y el socio eligen el mes y ven el reporte', async () => {
+    for (const user of [OWNER, PARTNER]) {
+      await text(user, '/mes');
+      await pickMonth(user);
+      expect(report(last())).toBe(true);
+    }
+    expect(accessLog.list()).toEqual([]);
+  });
+
+  it('/mes y 📆 Mes: el dependiente es rechazado antes del selector', async () => {
+    await text(CLERK, '/mes');
+    expect(last().text).toContain('No autorizado para reportes');
+    await text(CLERK, '📆 Mes');
+    expect(last().text).toContain('No autorizado para reportes');
+    expect(mpButtons()).toEqual([]);
+    expect(accessLog.list()).toMatchObject([
+      { telegramId: CLERK, command: '/mes', outcome: 'forbidden' },
+      { telegramId: CLERK, command: '/mes', outcome: 'forbidden' },
+    ]);
+  });
+
+  it('/validar: la dueña y el socio corren; el dependiente no ve el selector', async () => {
+    for (const user of [OWNER, PARTNER]) {
+      await text(user, '/validar');
+      await pickMonth(user);
+      expect(validation(last())).toBe(true);
+    }
+    await text(CLERK, '/validar');
+    expect(last().text).toContain('Tu rol no permite');
+    await text(CLERK, '🔎 Validar');
+    expect(last().text).toContain('Tu rol no permite');
+    expect(mpButtons()).toHaveLength(2);
+  });
+
+  it('el dependiente que toca el selector /mes de la dueña: rechazo con el permiso de /mes, en el log', async () => {
+    await text(OWNER, '/mes');
+    const data = monthButton();
+    const before = sent.length;
+    await click(CLERK, data);
+    expect(lastAnswer()).toContain('No autorizado para reportes');
+    expect(sent).toHaveLength(before);
+    expect(accessLog.list()).toMatchObject([
+      { telegramId: CLERK, command: '/mes', outcome: 'forbidden' },
+    ]);
+    // El selector sigue siendo de la dueña.
+    await click(OWNER, data);
+    expect(report(last())).toBe(true);
+  });
+
+  it('el dependiente que toca el selector de un botón (📆 Mes) o de /validar de la dueña: rechazado', async () => {
+    await text(OWNER, '📆 Mes');
+    await click(CLERK, monthButton());
+    expect(lastAnswer()).toContain('No autorizado para reportes');
+    await text(OWNER, '/validar');
+    await click(CLERK, monthButton());
+    expect(lastAnswer()).toContain('Tu rol no permite');
+    expect(accessLog.list()).toMatchObject([
+      { telegramId: CLERK, command: '/mes', outcome: 'forbidden' },
+      { telegramId: CLERK, command: '/validar', outcome: 'forbidden' },
+    ]);
+    expect(sent.some((m) => report(m) || validation(m))).toBe(false);
+  });
+
+  it('el socio que toca el selector de la dueña: elección vencida, sin reporte; la dueña lo sigue usando', async () => {
+    await text(OWNER, '/mes');
+    const data = monthButton();
+    await click(PARTNER, data);
+    expect(last().text).toBe(BOT_TEXT.CHOICE_EXPIRED);
+    expect(sent.some(report)).toBe(false);
+    await click(OWNER, data);
+    expect(report(last())).toBe(true);
+  });
+
+  it('un segundo toque del mismo selector no repite la operación', async () => {
+    await text(OWNER, '/mes');
+    const data = monthButton();
+    await click(OWNER, data);
+    const reports = sent.filter(report).length;
+    await click(OWNER, data);
+    expect(last().text).toBe(BOT_TEXT.CHOICE_EXPIRED);
+    expect(sent.filter(report)).toHaveLength(reports);
+  });
+
+  it('un mes que no se ofreció se rechaza', async () => {
+    await text(OWNER, '/mes');
+    const forged = monthButton().replace(/2026-10$/, '2030-01');
+    await click(OWNER, forged);
+    expect(last().text).toBe(BOT_TEXT.CHOICE_EXPIRED);
+    expect(sent.some(report)).toBe(false);
+  });
+
+  it('un callback mal formado nunca corre el comando', async () => {
+    await text(OWNER, '/mes');
+    const data = monthButton();
+    await click(OWNER, `${data}x`);
+    await click(OWNER, data.replace(/2026-10$/, '2026-1'));
+    expect(answers.at(-1)?.text).toBe('Ese botón ya no es válido.');
+    expect(sent.some(report)).toBe(false);
+    await click(CLERK, `${data}x`);
+    expect(lastAnswer()).toContain('No autorizado para reportes');
+  });
+
+  it('el selector vence a los 15 minutos', async () => {
+    await text(OWNER, '/mes');
+    const data = monthButton();
+    now = new Date(now.getTime() + 16 * 60 * 1000);
+    await click(OWNER, data);
+    expect(last().text).toBe(BOT_TEXT.CHOICE_EXPIRED);
+    expect(sent.some(report)).toBe(false);
+  });
+
+  it('un id inexistente: la dueña ve elección vencida; alguien fuera de la whitelist, "No autorizado."', async () => {
+    await click(OWNER, 'mp:AAAAAAAA:2026-10');
+    expect(last().text).toBe(BOT_TEXT.CHOICE_EXPIRED);
+    await click(STRANGER, 'mp:AAAAAAAA:2026-10');
+    expect(lastAnswer()).toBe('No autorizado.');
+    expect(accessLog.list()).toMatchObject([{ telegramId: STRANGER, outcome: 'unauthorized' }]);
+  });
+
+  it('alguien fuera de la whitelist no puede usar un selector real', async () => {
+    await text(OWNER, '/mes');
+    await click(STRANGER, monthButton());
+    expect(lastAnswer()).toBe('No autorizado.');
+    expect(sent.some(report)).toBe(false);
+  });
+
+  it('el permiso se revisa al tocar: si al socio le quitan el rol en medio, se rechaza', async () => {
+    await text(PARTNER, '/mes');
+    const data = monthButton();
+    usersRepo.upsert({ telegramId: PARTNER, name: 'Socio', role: ROLE.CLERK, active: true });
+    await click(PARTNER, data);
+    expect(lastAnswer()).toContain('No autorizado para reportes');
+    expect(accessLog.list()).toMatchObject([
+      { telegramId: PARTNER, command: '/mes', outcome: 'forbidden' },
+    ]);
+    expect(sent.some(report)).toBe(false);
+  });
+
+  it('si desactivan al socio entre el selector y el toque: "No autorizado."', async () => {
+    await text(PARTNER, '/mes');
+    const data = monthButton();
+    usersRepo.upsert({ telegramId: PARTNER, name: 'Socio', role: ROLE.PARTNER, active: false });
+    await click(PARTNER, data);
+    expect(lastAnswer()).toBe('No autorizado.');
+    expect(sent.some(report)).toBe(false);
+  });
+});
+
+describe('flujos guiados con mes', () => {
+  const NOV_9 = '2026-11-09T15:00:00Z';
+  let october: CountingReader;
+  let november: CountingReader;
+
+  /** Octubre con todos los días del fixture; noviembre solo con 01 y 02. */
+  async function twoMonths(): Promise<void> {
+    now = new Date(NOV_9);
+    october = countingReader(null);
+    november = countingReader(['01', '02']);
+    await makeBot(booksOf({ '2026-10': october, '2026-11': november }));
+  }
+
+  it('📍 Día en octubre: lista solo los días de octubre y lee solo el libro de octubre', async () => {
+    await twoMonths();
+    await text(OWNER, '📍 Día');
+    expect(last().labels).toEqual(['noviembre 2026', 'octubre 2026']);
+    await pickMonth(OWNER, '2026-10');
+    expect(last().buttons).toEqual([
+      'gd:2026-10:01',
+      'gd:2026-10:02',
+      'gd:2026-10:03',
+      'gd:2026-10:04',
+      'gd:2026-10:05',
+    ]);
+    await click(OWNER, 'gd:2026-10:03');
+    expect(last().text.startsWith('📒 <b>octubre 2026</b>\n')).toBe(true);
+    expect(last().text).toContain('pestaña 03');
+    expect(october.reads).toBeGreaterThan(0);
+    expect(november.reads).toBe(0);
+  });
+
+  it('📍 Día en noviembre: solo los días de noviembre', async () => {
+    await twoMonths();
+    await text(OWNER, '📍 Día');
+    await pickMonth(OWNER, '2026-11');
+    expect(last().buttons).toEqual(['gd:2026-11:01', 'gd:2026-11:02']);
+    await click(OWNER, 'gd:2026-11:02');
+    expect(last().text.startsWith('📒 <b>noviembre 2026</b>\n')).toBe(true);
+    expect(november.reads).toBeGreaterThan(0);
+    expect(october.reads).toBe(0);
+  });
+
+  it('↔️ Rango en octubre: desde y hasta salen del libro de octubre', async () => {
+    await twoMonths();
+    await text(OWNER, '↔️ Rango');
+    await pickMonth(OWNER, '2026-10');
+    expect(last().buttons).toHaveLength(5);
+    await click(OWNER, 'gr1:2026-10:04');
+    expect(last().buttons).toEqual(['gr2:2026-10:04:04', 'gr2:2026-10:04:05']);
+    await click(OWNER, 'gr2:2026-10:04:05');
+    expect(last().text.startsWith('📒 <b>octubre 2026</b>\n')).toBe(true);
+    expect(october.reads).toBeGreaterThan(0);
+    expect(november.reads).toBe(0);
+  });
+
+  it('↔️ Rango: un "desde" que no existe en el mes elegido se responde vencido', async () => {
+    await twoMonths();
+    await click(OWNER, 'gr1:2026-11:05');
+    expect(last().text).toBe(BOT_TEXT.FLOW_EXPIRED);
+  });
+
+  it('🏆 Top en octubre: mes → métrica → reporte de octubre', async () => {
+    await twoMonths();
+    await text(PARTNER, '🏆 Top');
+    await pickMonth(PARTNER, '2026-10');
+    expect(last().buttons).toEqual([
+      'gt:2026-10:venta',
+      'gt:2026-10:utilidad',
+      'gt:2026-10:unidades',
+    ]);
+    await click(PARTNER, 'gt:2026-10:venta');
+    expect(last().text.startsWith('📒 <b>octubre 2026</b>\n')).toBe(true);
+    expect(november.reads).toBe(0);
+  });
+
+  it('🔍 Producto en octubre: el nombre se busca en octubre', async () => {
+    await twoMonths();
+    await text(OWNER, '🔍 Producto');
+    await pickMonth(OWNER, '2026-10');
+    await text(OWNER, 'arroz');
+    expect(last().text.startsWith('📒 <b>octubre 2026</b>\n')).toBe(true);
+    expect(last().text).toContain('Vendió: <b>6</b> unidades');
+    expect(november.reads).toBe(0);
+  });
+
+  it('🔍 Producto con nombre ambiguo en octubre: el producto elegido también se lee en octubre', async () => {
+    await twoMonths();
+    await text(OWNER, '🔍 Producto');
+    await pickMonth(OWNER, '2026-10');
+    await text(OWNER, 'mayonesa');
+    expect(last().text).toContain('coincide con varios productos');
+    await click(OWNER, button('prod'));
+    expect(last().text.startsWith('📒 <b>octubre 2026</b>\n')).toBe(true);
+    expect(last().text).toContain('<b>mayonesa cepera</b>');
+    expect(november.reads).toBe(0);
+  });
+
+  it('📄 Fila en octubre: días de octubre y fila de octubre', async () => {
+    await twoMonths();
+    await text(OWNER, '📄 Fila');
+    await pickMonth(OWNER, '2026-10');
+    await text(OWNER, 'arroz');
+    expect(last().buttons).toHaveLength(5);
+    expect(last().buttons.every((b) => b.startsWith('gf:2026-10:'))).toBe(true);
+    await click(OWNER, 'gf:2026-10:02');
+    expect(last().text).toContain('K · Venta Bruta: <b>1,900</b>');
+    expect(november.reads).toBe(0);
+  });
+
+  it('📄 Fila: un día con otro mes que el de la pregunta se responde vencido', async () => {
+    await twoMonths();
+    await text(OWNER, '📄 Fila');
+    await pickMonth(OWNER, '2026-10');
+    await text(OWNER, 'arroz');
+    await click(OWNER, 'gf:2026-11:02');
+    expect(last().text).toBe(BOT_TEXT.FLOW_EXPIRED);
+    expect(november.reads).toBe(0);
+    // La pregunta de octubre sigue abierta.
+    await click(OWNER, 'gf:2026-10:02');
+    expect(last().text).toContain('K · Venta Bruta: <b>1,900</b>');
+  });
+
+  it('botones viejos sin mes (gd:03, gr1:02, gr2:01:03, gf:02, gt:venta): vencidos, sin leer el cuadre', async () => {
+    await twoMonths();
+    for (const data of ['gd:03', 'gr1:02', 'gr2:01:03', 'gf:02', 'gt:venta']) {
+      await click(OWNER, data);
+      expect(last().text).toBe(BOT_TEXT.FLOW_EXPIRED);
+    }
+    expect(october.reads).toBe(0);
+    expect(november.reads).toBe(0);
+  });
+
+  it('un mes no registrado en el callback (inventado): vencido, sin leer ningún libro', async () => {
+    await twoMonths();
+    for (const data of ['gd:2030-01:03', 'gr1:2030-01:02', 'gr2:2026-09:01:03', 'gt:2030-01:venta'])
+      await click(OWNER, data);
+    expect(sent.map((m) => m.text)).toEqual(Array(4).fill(BOT_TEXT.FLOW_EXPIRED));
+    expect(october.reads).toBe(0);
+    expect(november.reads).toBe(0);
+  });
+
+  it('un mes registrado pero sin pestañas: /dia del día pedido responde sin tocar otro libro', async () => {
+    now = new Date(NOV_9);
+    october = countingReader(null);
+    const december = countingReader([]);
+    await makeBot(booksOf({ '2026-10': october, '2026-12': december }));
+    await click(OWNER, 'gd:2026-12:03');
+    expect(last().text).toContain('diciembre 2026');
+    expect(last().text).not.toContain('pestaña 03 · TC');
+  });
+
+  it('permisos: el dependiente no puede usar ningún botón de flujo, aunque traiga mes', async () => {
+    await twoMonths();
+    for (const data of [
+      'gd:2026-10:03',
+      'gr1:2026-10:02',
+      'gr2:2026-10:01:03',
+      'gf:2026-10:02',
+      'gt:2026-10:venta',
+      'gd:2030-01:03',
+    ]) {
+      await click(CLERK, data);
+      expect(answers.at(-1)?.text).toContain('No autorizado para reportes');
+    }
+    expect(sent).toEqual([]);
+    expect(accessLog.list().map((entry) => entry.command)).toEqual([
+      '/dia',
+      '/rango',
+      '/rango',
+      '/fila',
+      '/top',
+      '/dia',
+    ]);
+    expect(october.reads).toBe(0);
+  });
+
+  it('permisos: el dependiente no ve el selector de 📍 Día, ↔️ Rango, 📄 Fila, 🏆 Top ni 🔍 Producto', async () => {
+    for (const label of ['📍 Día', '↔️ Rango', '📄 Fila', '🏆 Top', '🔍 Producto']) {
+      await text(CLERK, label);
+      expect(last().text).toContain('No autorizado para reportes');
+    }
+    expect(mpButtons()).toEqual([]);
+  });
+
+  it('permisos: el dependiente que toca el selector de 📍 Día de la dueña es rechazado', async () => {
+    await text(OWNER, '📍 Día');
+    await click(CLERK, monthButton());
+    expect(answers.at(-1)?.text).toContain('No autorizado para reportes');
+    expect(accessLog.list()).toMatchObject([
+      { telegramId: CLERK, command: '/dia', outcome: 'forbidden' },
+    ]);
+    // La dueña lo sigue usando.
+    await pickMonth(OWNER);
+    expect(last().text).toBe(BOT_TEXT.ASK_DAY);
+  });
+
+  it('el socio puede usar los botones de día con mes de cualquier mensaje (no guardan estado)', async () => {
+    await text(OWNER, '📍 Día');
+    await pickMonth(OWNER);
+    await click(PARTNER, 'gd:2026-10:02');
+    expect(last().text).toContain('pestaña 02 · TC 775');
+  });
+
+  it('tocar el mes de 🔍 Producto reemplaza otra pregunta abierta', async () => {
+    await text(OWNER, '📄 Fila');
+    await pickMonth(OWNER);
+    await text(OWNER, '🔍 Producto');
+    await pickMonth(OWNER);
+    await text(OWNER, 'arroz');
+    expect(last().text).toContain('Vendió: <b>6</b> unidades');
+  });
+});
+
+describe('escrituras con mes: /tc', () => {
+  const NOV_9 = '2026-11-09T15:00:00Z';
+  let octSheets: FakeSheetsGateway;
+  let novSheets: FakeSheetsGateway;
+  const tcOf = (gateway: FakeSheetsGateway, tab: string) => gateway.cell(tab, 'Q18');
+
+  /** 9 nov: octubre y noviembre, cada uno con su hoja; ambos con la pestaña 05. */
+  async function twoBooks(): Promise<void> {
+    now = new Date(NOV_9);
+    octSheets = new FakeSheetsGateway([{ title: '05' }]);
+    novSheets = new FakeSheetsGateway([{ title: '05' }, { title: '09' }]);
+    await makeBot(
+      booksOf(
+        { '2026-10': countingReader(null), '2026-11': countingReader(['01']) },
+        { '2026-10': octSheets, '2026-11': novSheets },
+      ),
+    );
+  }
+
+  it('/tc 780 05 en octubre: vista previa con 📒 octubre y escribe solo en el libro de octubre', async () => {
+    await twoBooks();
+    await text(OWNER, '/tc 780 05');
+    expect(last().labels).toEqual(['noviembre 2026', 'octubre 2026']);
+    await pickMonth(OWNER, '2026-10');
+    expect(last().text).toBe('📒 octubre 2026\n💱 TC de la pestaña 05: vacía → 780 CUP por USD');
+    await click(OWNER, button('ok'));
+    expect(last().text).toBe('✅ TC de 05: 780.');
+    expect(tcOf(octSheets, '05')).toBe(780);
+    expect(tcOf(novSheets, '05')).toBeUndefined();
+  });
+
+  it('/tc 780 05 en noviembre: escribe solo en el libro de noviembre', async () => {
+    await twoBooks();
+    await text(OWNER, '/tc 780 05');
+    await pickMonth(OWNER, '2026-11');
+    expect(last().text).toContain('📒 noviembre 2026\n💱 TC de la pestaña 05');
+    await click(OWNER, button('ok'));
+    expect(tcOf(novSheets, '05')).toBe(780);
+    expect(tcOf(octSheets, '05')).toBeUndefined();
+  });
+
+  it('/tc 780 sin día en el mes en curso: la pestaña de hoy (09 de noviembre)', async () => {
+    await twoBooks();
+    await text(OWNER, '/tc 780');
+    await pickMonth(OWNER, '2026-11');
+    expect(last().text).toContain('📒 noviembre 2026\n💱 TC de la pestaña 09');
+    await click(OWNER, button('ok'));
+    expect(tcOf(novSheets, '09')).toBe(780);
+  });
+
+  it('/tc 780 sin día en otro mes: pide el día escrito y no deja nada pendiente', async () => {
+    await twoBooks();
+    await text(OWNER, '/tc 780');
+    await pickMonth(OWNER, '2026-10');
+    expect(last().text).toBe('Para octubre 2026 escribe también el día, por ejemplo: /tc 780 05.');
+    expect(last().buttons).toEqual([]);
+    expect(sent.some((m) => m.buttons.some((b) => b.startsWith('ok:')))).toBe(false);
+    // Nunca se adivina el día: ni el de hoy (09) ni otro, en ningún libro.
+    expect(tcOf(octSheets, '05')).toBeUndefined();
+    expect(tcOf(novSheets, '09')).toBeUndefined();
+    await text(OWNER, '780');
+    expect(last().text).toBe(FREE_TEXT_REPLY);
+  });
+
+  it('/tc 780 31 ya no se va solo al mes anterior: corre en el mes elegido', async () => {
+    await twoBooks();
+    await text(OWNER, '/tc 780 31');
+    await pickMonth(OWNER, '2026-11');
+    expect(last().text).toContain('No existe la pestaña 31');
+    expect(sent.some((m) => m.text.includes('octubre 2026\n💱'))).toBe(false);
+  });
+
+  it('octubre cerrado: la dueña solo ve "⚠️ Confirmar igual", con motivo escribe en octubre', async () => {
+    await twoBooks();
+    markMonthClosed(settingsRepo, '2026-10');
+    await text(OWNER, '/tc 780 05');
+    expect(last().labels).toEqual(['noviembre 2026', '🔒 octubre 2026']);
+    await pickMonth(OWNER, '2026-10');
+    expect(last().text.startsWith('📒 octubre 2026\n💱 TC de la pestaña 05')).toBe(true);
+    expect(last().text).toContain('🔒');
+    expect(last().buttons.some((b) => b.startsWith('ok:'))).toBe(false);
+    await click(OWNER, button('force'));
+    expect(last().text).toBe(BOT_TEXT.ASK_REASON);
+    await text(OWNER, 'Faltaba la TC del 5');
+    expect(last().text).toBe('✅ TC de 05: 780.');
+    expect(tcOf(octSheets, '05')).toBe(780);
+    expect(tcOf(novSheets, '05')).toBeUndefined();
+  });
+
+  it('💱 TC en octubre: pide número y día juntos, insiste si falta el día y escribe en octubre', async () => {
+    await twoBooks();
+    await text(OWNER, '💱 TC');
+    expect(last().text).toBe(MONTH_PICK_TEXT.ASK);
+    await pickMonth(OWNER, '2026-10');
+    expect(last().text).toBe(
+      '💱 TC de octubre 2026: escribe el número y el día, por ejemplo: 780 05. /cancelar para salir.',
+    );
+    await text(OWNER, '780');
+    expect(last().text).toBe(BOT_TEXT.TC_VALUE_AND_DAY);
+    await text(OWNER, 'abc 05');
+    expect(last().text).toBe(BOT_TEXT.TC_VALUE_AND_DAY);
+    await text(OWNER, '780 05');
+    expect(last().text).toBe('📒 octubre 2026\n💱 TC de la pestaña 05: vacía → 780 CUP por USD');
+    await click(OWNER, button('ok'));
+    expect(tcOf(octSheets, '05')).toBe(780);
+    expect(tcOf(novSheets, '05')).toBeUndefined();
+  });
+
+  it('💱 TC en el mes en curso: solo el número, va a la pestaña de hoy', async () => {
+    await twoBooks();
+    await text(OWNER, '💱 TC');
+    await pickMonth(OWNER, '2026-11');
+    expect(last().text).toBe(BOT_TEXT.ASK_TC_VALUE);
+    await text(OWNER, '780');
+    expect(last().text).toContain('📒 noviembre 2026\n💱 TC de la pestaña 09');
+  });
+
+  it('permisos: el socio y el dependiente no ven el selector de /tc ni de 💱 TC', async () => {
+    await twoBooks();
+    for (const user of [PARTNER, CLERK]) {
+      await text(user, '/tc 780 05');
+      expect(last().text).toContain('Tu rol no permite');
+      await text(user, '💱 TC');
+      expect(last().text).toContain('Tu rol no permite');
+    }
+    expect(mpButtons()).toEqual([]);
+    expect(accessLog.list()).toMatchObject([
+      { telegramId: PARTNER, command: '/tc', outcome: 'forbidden' },
+      { telegramId: PARTNER, command: '/tc', outcome: 'forbidden' },
+      { telegramId: CLERK, command: '/tc', outcome: 'forbidden' },
+      { telegramId: CLERK, command: '/tc', outcome: 'forbidden' },
+    ]);
+  });
+
+  it('permisos: el socio o el dependiente que tocan el selector /tc de la dueña son rechazados', async () => {
+    await twoBooks();
+    await text(OWNER, '/tc 780 05');
+    const data = monthButton('2026-10');
+    const before = sent.length;
+    for (const user of [PARTNER, CLERK]) {
+      await click(user, data);
+      expect(answers.at(-1)?.text).toContain('Tu rol no permite');
+    }
+    expect(sent).toHaveLength(before);
+    expect(accessLog.list()).toMatchObject([
+      { telegramId: PARTNER, command: '/tc', outcome: 'forbidden' },
+      { telegramId: CLERK, command: '/tc', outcome: 'forbidden' },
+    ]);
+    // El selector sigue siendo de la dueña.
+    await click(OWNER, data);
+    expect(last().text).toContain('📒 octubre 2026\n💱 TC de la pestaña 05');
+  });
+
+  it('un segundo toque del selector /tc no prepara otra escritura', async () => {
+    await twoBooks();
+    await text(OWNER, '/tc 780 05');
+    const data = monthButton('2026-10');
+    await click(OWNER, data);
+    await click(OWNER, data);
+    expect(last().text).toBe(BOT_TEXT.CHOICE_EXPIRED);
+    expect(sent.filter((m) => m.text.includes('💱 TC de la pestaña 05'))).toHaveLength(1);
+  });
+});
+
+describe('escrituras con mes: /ipv con hoja sin fecha', () => {
+  let octSheets: FakeSheetsGateway;
+  let novSheets: FakeSheetsGateway;
+  const titles = async (gateway: FakeSheetsGateway) =>
+    (await gateway.listTabs()).map((tab) => tab.title);
+
+  /** 9 nov: octubre con días; noviembre registrado y vacío; diciembre registrado y vacío. */
+  async function threeBooks(): Promise<void> {
+    now = new Date('2026-11-09T15:00:00Z');
+    octSheets = new FakeSheetsGateway();
+    novSheets = new FakeSheetsGateway();
+    await makeBot(
+      booksOf(
+        {
+          '2026-10': countingReader(null),
+          '2026-11': countingReader([]),
+          '2026-12': countingReader([]),
+        },
+        { '2026-10': octSheets, '2026-11': novSheets, '2026-12': new FakeSheetsGateway() },
+      ),
+    );
+  }
+
+  it('el selector de /ipv ofrece el mes en curso vacío; el de /mes no; el futuro vacío nunca', async () => {
+    await threeBooks();
+    await document(OWNER);
+    await text(OWNER, 'IPV Alf. 30 sep');
+    expect(last().labels).toEqual(['noviembre 2026', 'octubre 2026']);
+    await text(OWNER, '/mes');
+    expect(last().labels).toEqual(['octubre 2026']);
+  });
+
+  it('día cargado en octubre: la pestaña se crea solo en el libro de octubre', async () => {
+    await threeBooks();
+    await document(OWNER);
+    await text(OWNER, 'IPV Alf. 30 sep');
+    await pickMonth(OWNER, '2026-10');
+    await text(OWNER, '05');
+    expect(preview().text).toContain('→ pestaña 05');
+    await click(OWNER, button('ok', preview()));
+    expect(last().text).toContain('✅ Pestaña 05 creada');
+    expect(await titles(octSheets)).toContain('05');
+    expect(await titles(novSheets)).not.toContain('05');
+  });
+
+  it('día cargado en noviembre (vacío): va al libro de noviembre y rechaza fechas de otro mes', async () => {
+    await threeBooks();
+    await document(OWNER);
+    await text(OWNER, 'IPV Alf. 30 sep');
+    await pickMonth(OWNER, '2026-11');
+    expect(last().text).toBe(
+      'Hoja «IPV Alf. 30 sep». ¿Qué día de noviembre 2026? Escribe el día (ej. 05).',
+    );
+    await text(OWNER, '5 oct');
+    expect(last().text).toBe('Ese día no es de noviembre 2026. Escribe solo el día, o /cancelar.');
+    await text(OWNER, '31');
+    expect(last().text).toBe(BOT_TEXT.SHEET_DAY_INVALID);
+    await text(OWNER, '01');
+    expect(preview().text).toContain('→ pestaña 01');
+    await click(OWNER, button('ok', preview()));
+    expect(await titles(novSheets)).toContain('01');
+    expect(await titles(octSheets)).toEqual([]);
+  });
+
+  it('al rehacer la vista previa tras guardar una equivalencia se conserva el mes elegido', async () => {
+    // Enero de 2027 con el libro de enero de 2026 todavía registrado: el día 05 sin año
+    // se adivinaría como 2027-01; el mes elegido (2026-01) tiene que mantenerse.
+    now = new Date('2027-01-10T15:00:00Z');
+    const jan2026 = new FakeSheetsGateway();
+    const jan2027 = new FakeSheetsGateway();
+    await makeBot(
+      booksOf(
+        { '2026-01': countingReader(null), '2027-01': countingReader(['01']) },
+        { '2026-01': jan2026, '2027-01': jan2027 },
+      ),
+    );
+    await document(OWNER);
+    await text(OWNER, 'IPV Alf. 30 sep');
+    expect(last().labels).toEqual(['enero 2027', 'enero 2026']);
+    await pickMonth(OWNER, '2026-01');
+    await text(OWNER, '05');
+    const first = preview();
+    expect(last().text).toContain('🔗 (1 de');
+    await click(OWNER, 'ia:0');
+    await click(OWNER, 'ia:end');
+    expect(sent.some((m) => m.text.startsWith('🔄 Rehago la vista previa'))).toBe(true);
+    const again = preview();
+    expect(again).not.toBe(first);
+    await click(OWNER, button('ok', again));
+    expect(last().text).toContain('✅ Pestaña 05 creada');
+    expect(await titles(jan2026)).toContain('05');
+    expect(await titles(jan2027)).toEqual([]);
   });
 });
 
@@ -881,6 +1841,14 @@ describe('utilidades', () => {
   it('splitMessage corta por líneas sin pasar el máximo', () => {
     const parts = splitMessage(['a'.repeat(6), 'b'.repeat(6), 'c'.repeat(6)].join('\n'), 13);
     expect(parts).toEqual(['aaaaaa\nbbbbbb', 'cccccc']);
+  });
+
+  it('parseTcArgs: número > 0 y día opcional de 1 o 2 cifras', () => {
+    expect(parseTcArgs('780')).toEqual({ tc: 780, tab: null });
+    expect(parseTcArgs(' 780  5 ')).toEqual({ tc: 780, tab: '05' });
+    expect(parseTcArgs('780 31')).toEqual({ tc: 780, tab: '31' });
+    for (const bad of ['', 'abc', '0', '-5 03', '780 x', '780 123'])
+      expect(parseTcArgs(bad)).toBeNull();
   });
 
   it('parseTcValue', () => {
@@ -1032,6 +2000,7 @@ describe('➕ Gasto (historial en la hoja Gastos)', () => {
 
   it('📊 Gastos sigue siendo el reporte del cuadre', async () => {
     await text(OWNER, '📊 Gastos');
+    await pickMonth(OWNER);
     expect(sent.some((m) => m.text.includes('No hay gastos registrados'))).toBe(true);
     expect(expenses.expenses).toEqual([]);
   });

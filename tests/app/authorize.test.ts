@@ -33,13 +33,13 @@ describe('authorize', () => {
   });
 
   it('fuera de la whitelist: "no autorizado" y queda en el log', () => {
-    const result = authorize(deps(), { telegramId: 99, username: 'intruso', command: '/hoy' });
+    const result = authorize(deps(), { telegramId: 99, username: 'intruso', command: '/mes' });
     expect(result).toEqual({ status: AUTH_STATUS.UNAUTHORIZED, message: 'No autorizado.' });
     expect(accessLog.list()).toMatchObject([
       {
         telegramId: 99,
         username: 'intruso',
-        command: '/hoy',
+        command: '/mes',
         outcome: ACCESS_OUTCOME.UNAUTHORIZED,
       },
     ]);

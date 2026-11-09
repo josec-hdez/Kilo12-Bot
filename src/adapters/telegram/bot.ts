@@ -11,6 +11,7 @@ import {
   type CloseReview,
 } from '../../app/close-month.js';
 import { cancelPending, confirmPending } from '../../app/confirm.js';
+import { monthReader } from '../../app/cuadre-books.js';
 import {
   ALIAS_PREPARE,
   applyAliasChange,
@@ -27,7 +28,9 @@ import {
 } from '../../app/manage-equivalences.js';
 import { FREE_TEXT_REPLY, helpText } from '../../app/help.js';
 import {
-  ASK_SHEET_DAY,
+  askSheetDay,
+  dayOfOtherMonth,
+  isDayOfOtherMonth,
   notFoundText,
   parseDayAnswer,
   resolveCaptionSheet,
@@ -36,7 +39,24 @@ import {
   sheetQuestion,
   suggestionQuestion,
 } from '../../app/ipv-intake.js';
-import { BUTTON_FLOW, buttonForText, type MenuButton } from '../../app/keyboard-menu.js';
+import {
+  BUTTON_FLOW,
+  buttonForText,
+  MENU_BUTTONS,
+  normalizeLabel,
+  type MenuButton,
+} from '../../app/keyboard-menu.js';
+import {
+  askMonthForCommand,
+  askTcValueAndDay,
+  availableMonths,
+  MONTH_PICK_TEXT,
+  monthHeader,
+  monthHeaderPlain,
+  needsMonth,
+  tcDayRequired,
+  type AvailableMonthsOptions,
+} from '../../app/month-pick.js';
 import { dayTab, prepareIpvLoad } from '../../app/load-ipv.js';
 import {
   CONFIRM_STATUS,
@@ -59,7 +79,6 @@ import {
   rangeReport,
   REPORT_KIND,
   rowReport,
-  todayReport,
   topReport,
   weekReport,
   type ProductRequest,
@@ -94,11 +113,11 @@ import { prepareSetTc } from '../../app/set-tc.js';
 import { todayDateIn, todayIn } from '../../app/today.js';
 import { prepareUndo } from '../../app/undo.js';
 import { parseValidateArgs, runValidation } from '../../app/validate-report.js';
-import { can, PERMISSION } from '../../core/auth.js';
+import { can, canRunCommand, commandName, PERMISSION } from '../../core/auth.js';
 import { parseExpenseCurrency } from '../../core/expense.js';
 import { buildAliasIndex } from '../../core/mapping.js';
 import type { MonthClose } from '../../core/month-close.js';
-import { monthName, monthOfDate, monthOfDayNumber, monthOfRef } from '../../core/months.js';
+import { monthName, monthOfDate, monthOfRef, type MonthKey } from '../../core/months.js';
 import { SETTING } from '../../core/settings.js';
 import type { DayRef, IpvDay } from '../../core/types.js';
 import type { IpvSource } from '../../ports/ipv-source.js';
@@ -120,8 +139,10 @@ import {
   expenseConfirmKeyboard,
   expenseCurrencyKeyboard,
   expenseDateKeyboard,
+  flowPrefix,
   IPV_ALIAS_ACTION,
   ipvAliasKeyboard,
+  monthButtons,
   productChoiceKeyboard,
   replyKeyboard,
   sheetSuggestionKeyboard,
@@ -138,8 +159,6 @@ export interface BotDeps {
   pipeline: PipelineDeps;
   auth: AuthDeps;
   settings: SettingsRepository;
-  /** De dónde leen /validar y los reportes: la hoja (real o simulada) o el .xlsx del cuadre. */
-  cuadre: CuadreReader;
   /** Historial de /gasto (hoja "Gastos"); nunca escribe en el cuadre. */
   expenses: ExpenseLog;
   /** /cuadremes: abre un libro para revisarlo. Sin esto (hoja simulada) no se registran libros. */
@@ -170,7 +189,6 @@ const TYPING_EVERY_MS = 4_000;
 
 /** Lo que se muestra al instante mientras se calcula cada reporte. */
 const REPORT_PLACEHOLDER: Readonly<Record<string, string>> = {
-  hoy: '⏳ Calculando el día de hoy…',
   dia: '⏳ Calculando el día…',
   semana: '⏳ Calculando los últimos 7 días…',
   mes: '⏳ Calculando el mes…',
@@ -191,7 +209,8 @@ export const BOT_TEXT = {
   NO_DRIVE:
     'Todavía no leo el IPV desde Drive (faltan los IDs de la carpeta). Envíame el .xlsx; si tiene varias hojas, te pregunto cuál analizar.',
   NO_SHEETS: 'El archivo no tiene hojas.',
-  SHEET_DAY_INVALID: 'No entiendo ese día. Escribe el día (ej. 05) o fecha (5 oct), o /cancelar.',
+  SHEET_DAY_INVALID:
+    'No entiendo ese día. Escribe solo el día del mes elegido (ej. 05), o /cancelar.',
   SUGGESTION_ABOVE: 'Responde Sí o No con los botones de arriba, o /cancelar.',
   NOT_XLSX: 'Solo leo archivos .xlsx del IPV.',
   FILE_TOO_BIG: 'El archivo pasa de 20 MB; Telegram no deja descargarlo.',
@@ -201,7 +220,8 @@ export const BOT_TEXT = {
     '✍️ Escribe el motivo para confirmar igual; queda en el registro de cambios. /cancelar para no confirmar.',
   REASON_CANCELLED: 'Listo, no se confirmó nada. La acción sigue pendiente 15 minutos.',
   ONLY_OWNER_FORCE: 'Solo una dueña puede confirmar con bloqueos.',
-  TC_USAGE: 'Uso: /tc 780 (día de hoy) o /tc 780 03 (pestaña 03).',
+  TC_USAGE:
+    'Uso: /tc 780 (día de hoy, en el mes en curso) o /tc 780 03 (pestaña 03 del mes que elijas).',
   UNKNOWN_COMMAND: 'Ese comando todavía no está disponible. Usa /ayuda.',
   CHOICE_EXPIRED: 'Esa elección ya venció (15 minutos). Repite el comando.',
   GENERIC_ERROR: '⚠️ Algo falló procesando el mensaje. No se escribió nada. Inténtalo de nuevo.',
@@ -215,6 +235,9 @@ export const BOT_TEXT = {
   ASK_TC_VALUE:
     '💱 ¿Cuál es la TC de hoy? Escribe solo el número, por ejemplo: 780. /cancelar para salir.',
   TC_NOT_NUMBER: 'Escribe solo el número de la TC, por ejemplo: 780. /cancelar para salir.',
+  TC_VALUE_AND_DAY:
+    'Escribe el número de la TC y el día, por ejemplo: 780 05. /cancelar para salir.',
+  CHOOSE_MONTH_ABOVE: 'Elige el mes con los botones de arriba, o /cancelar.',
   CHOOSE_DAY_ABOVE: 'Elige el día con los botones de arriba, o /cancelar.',
   NO_DAYS: 'Todavía no hay días en el cuadre.',
   FLOW_CANCELLED: 'Listo, cancelado.',
@@ -292,17 +315,47 @@ const FLOW_CALLBACK_COMMAND: Readonly<Record<string, string>> = {
 };
 
 /**
+ * Comandos que ya no existen → comando que los reemplaza. El chat conserva botones
+ * `menu:hoy` y teclados viejos: en vez de "Tu rol no permite", se tratan como /ayuda.
+ */
+const RETIRED_COMMANDS: Readonly<Record<string, string>> = { hoy: 'ayuda' };
+
+/**
+ * Botones quitados del teclado fijo que un teclado viejo del cliente todavía puede
+ * mandar: se responden con /ayuda, que trae el teclado nuevo.
+ */
+const RETIRED_LABELS: ReadonlySet<string> = new Set(['📅 Hoy'].map(normalizeLabel));
+const RETIRED_LABEL_COMMAND = '/ayuda';
+
+function isRetiredLabel(text: string): boolean {
+  return RETIRED_LABELS.has(normalizeLabel(text));
+}
+
+/** El comando vigente: el reemplazo si fue retirado, o el mismo. */
+function currentCommand(command: string): string {
+  const name = commandName(command);
+  return Object.hasOwn(RETIRED_COMMANDS, name) ? (RETIRED_COMMANDS[name] ?? name) : name;
+}
+
+/**
  * Comando que el middleware de permisos debe revisar para este update. Un botón del
  * teclado fijo y la respuesta a una pregunta de un flujo guiado cuentan como su comando.
  */
 function commandOf(
   ctx: BotContext,
   flowCommand: (telegramId: number) => string | undefined,
+  pickCommand: (pickId: string) => string | undefined,
 ): string | null {
   if (ctx.message?.document !== undefined) return '/ipv';
   const text = ctx.message?.text;
-  if (text?.startsWith('/') === true) return text.split(/\s+/)[0] ?? null;
+  if (text?.startsWith('/') === true) {
+    const typed = text.split(/\s+/)[0] ?? '';
+    return Object.hasOwn(RETIRED_COMMANDS, commandName(typed))
+      ? `/${currentCommand(typed)}`
+      : typed;
+  }
   if (text !== undefined) {
+    if (isRetiredLabel(text)) return RETIRED_LABEL_COMMAND;
     const button = buttonForText(text);
     if (button !== undefined) return `/${button.command}`;
     const pending = ctx.from === undefined ? undefined : flowCommand(ctx.from.id);
@@ -311,7 +364,13 @@ function commandOf(
   const data = ctx.callbackQuery?.data;
   if (data === undefined) return null;
   const prefix = data.split(':')[0] ?? '';
-  if (prefix === CALLBACK.MENU) return `/${data.slice(CALLBACK.MENU.length + 1)}`;
+  if (prefix === CALLBACK.MENU) return `/${currentCommand(data.slice(CALLBACK.MENU.length + 1))}`;
+  // El mes elegido exige el permiso del comando que lo pidió (guardado con la pregunta),
+  // nunca uno genérico. Sin pregunta guardada: solo la whitelist, y el handler lo rechaza.
+  if (prefix === CALLBACK.MONTH_PICK) {
+    const command = pickCommand(data.split(':')[1] ?? '');
+    return command === undefined ? null : `/${command}`;
+  }
   return Object.hasOwn(FLOW_CALLBACK_COMMAND, prefix)
     ? (FLOW_CALLBACK_COMMAND[prefix] ?? null)
     : null;
@@ -339,13 +398,31 @@ export function parseTcValue(raw: string): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+/** `/tc 780` → valor sin día; `/tc 780 05` → valor y pestaña `05`. */
+export interface TcArgs {
+  tc: number;
+  /** Pestaña escrita (`05`), o null si no se dio día. */
+  tab: string | null;
+}
+
+/** Sintaxis de /tc: número mayor que 0 y, opcional, el día (1 o 2 cifras). Si no, null. */
+export function parseTcArgs(args: string): TcArgs | null {
+  const [rawValue = '', rawTab] = args.trim().split(/\s+/);
+  const tc = parseTcValue(rawValue);
+  if (tc === null || tc <= 0) return null;
+  if (rawTab === undefined) return { tc, tab: null };
+  return /^\d{1,2}$/.test(rawTab) ? { tc, tab: rawTab.padStart(2, '0') } : null;
+}
+
 /** Paso de la elección de la hoja del IPV. */
 const IPV_STEP = {
   /** Espera el nombre o el número de la hoja. */
   SHEET: 'sheet',
   /** Propuso una hoja parecida: espera Sí / No. */
   SUGGESTION: 'suggestion',
-  /** La hoja no tiene fecha en el nombre: espera el día del cuadre. */
+  /** La hoja no tiene fecha en el nombre: espera que toque el mes (selector). */
+  MONTH: 'month',
+  /** Hoja sin fecha y mes ya elegido: espera el día del cuadre. */
   DAY: 'day',
 } as const;
 
@@ -356,8 +433,10 @@ interface IpvChoice {
   step: IpvStep;
   source: IpvSource;
   sheets: string[];
-  /** Hoja propuesta (SUGGESTION) o elegida (DAY). */
+  /** Hoja propuesta (SUGGESTION) o elegida (MONTH, DAY). */
   sheet?: string;
+  /** Mes elegido para una hoja sin fecha (DAY). */
+  month?: MonthKey;
 }
 
 interface AwaitingReason {
@@ -372,6 +451,8 @@ interface AliasReview {
   source: IpvSource;
   sheet: string;
   ref: DayRef;
+  /** Mes elegido con el selector (hoja sin fecha): la vista previa rehecha va al mismo libro. */
+  month?: MonthKey;
   /** Carga pendiente que se reemplaza al rehacer la vista previa (null si quedó bloqueada). */
   pendingId: string | null;
   questions: AliasQuestion[];
@@ -386,7 +467,36 @@ interface ProductChoice {
   telegramId: number;
   request: ProductRequest;
   options: string[];
+  /** Mes del reporte que preguntó: el producto elegido se lee en ese mismo mes. */
+  month: MonthKey;
 }
+
+/** Qué se reanuda al tocar un mes del selector. */
+const PICK_KIND = {
+  /** Comando escrito (o botón `menu:` viejo): se corre con sus argumentos. */
+  COMMAND: 'command',
+  /** Botón del teclado fijo: se vuelve a tocar con el mes ya elegido. */
+  BUTTON: 'button',
+  /** Hoja del IPV sin fecha: con el mes elegido se pregunta el día. */
+  IPV_DAY: 'ipv_day',
+} as const;
+
+type PickKind = (typeof PICK_KIND)[keyof typeof PICK_KIND];
+
+/** Pregunta "📒 ¿De qué mes?" abierta. Cada una sirve una sola vez. */
+interface MonthPick {
+  /** Solo quien la pidió puede usarla. */
+  telegramId: number;
+  kind: PickKind;
+  /** Comando que la pidió: de aquí sale el permiso que exige el toque. */
+  command: string;
+  /** Argumentos escritos ('' para botones). */
+  args: string;
+  /** Meses ofrecidos: el tocado tiene que ser uno de estos. */
+  months: MonthKey[];
+}
+
+type MonthPickRequest = Pick<MonthPick, 'kind' | 'command' | 'args'>;
 
 /** Paso de un flujo guiado del teclado que espera algo del usuario. */
 const FLOW_STEP = {
@@ -396,7 +506,7 @@ const FLOW_STEP = {
   ROW_PRODUCT: 'row_product',
   /** 📄 Fila: ya tiene el producto, espera el día (botones). */
   ROW_DAY: 'row_day',
-  /** 💱 TC: espera el número. */
+  /** 💱 TC: espera el número (mes en curso) o el número y el día (otro mes). */
   TC: 'tc',
   /** ➕ Gasto: el paso concreto va en `expense.step`. */
   EXPENSE: 'expense',
@@ -410,6 +520,8 @@ interface GuidedFlow {
   command: string;
   /** Producto elegido en 📄 Fila. */
   product?: string;
+  /** Mes elegido antes de 🔍 Producto, 📄 Fila y 💱 TC: sus pasos usan solo ese libro. */
+  month?: MonthKey;
   /** Borrador de ➕ Gasto. */
   expense?: ExpenseDraft;
 }
@@ -434,6 +546,9 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
   const aliasChanges = new TtlStore<AliasChange>(CONVERSATION_TTL_MS, clock);
   /** Preguntas de equivalencia de la última vista previa de /ipv, por usuario. */
   const aliasReviews = new TtlStore<AliasReview>(CONVERSATION_TTL_MS, clock);
+  /** Selectores de mes abiertos, por id (va en el callback_data). */
+  const monthPicks = new TtlStore<MonthPick>(CONVERSATION_TTL_MS, clock);
+  const pickCommand = (pickId: string) => monthPicks.get(pickId)?.command;
   const equivalenceDeps = (): EquivalenceDeps => ({
     catalog: deps.pipeline.catalog,
     changeLog: deps.pipeline.changeLog,
@@ -441,6 +556,13 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
   });
   /** Fecha de hoy (con año) en la zona del negocio. */
   const today = () => todayDateIn(clock(), deps.timezone);
+  /** Mes en curso en la zona del negocio. */
+  const currentMonth = (): MonthKey => monthOfDate(today());
+  /**
+   * Lectura de reportes y /validar para un mes: sale de `pipeline.books`, los mismos
+   * libros que usan las escrituras.
+   */
+  const cuadreFor = (month: MonthKey): CuadreReader => monthReader(deps.pipeline.books, month);
   const flowCommand = (telegramId: number) =>
     ipvChoices.get(String(telegramId)) === undefined
       ? flows.get(String(telegramId))?.command
@@ -454,7 +576,7 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
     const result = authorize(deps.auth, {
       telegramId: from.id,
       username: from.username ?? null,
-      command: commandOf(ctx, flowCommand),
+      command: commandOf(ctx, flowCommand, pickCommand),
     });
     if (result.status === AUTH_STATUS.ALLOWED) {
       ctx.kiloUser = result.user;
@@ -469,17 +591,24 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
   });
 
   // ------------------------------------------------------------ helpers
-  async function showPrepared(ctx: BotContext, result: PrepareResult): Promise<void> {
+  /** Vista previa con ✅/❌. Con `month` (escritura en un mes elegido) lleva el encabezado 📒. */
+  async function showPrepared(
+    ctx: BotContext,
+    result: PrepareResult,
+    month?: MonthKey,
+  ): Promise<void> {
+    const withHeader = (preview: string) =>
+      month === undefined ? preview : `${monthHeaderPlain(month)}\n${preview}`;
     switch (result.status) {
       case PREPARE_STATUS.READY:
         await replyLong(
           ctx,
-          result.preview,
+          withHeader(result.preview),
           confirmKeyboard(result.pendingId, result.requiresForce),
         );
         return;
       case PREPARE_STATUS.BLOCKED:
-        await replyLong(ctx, result.preview);
+        await replyLong(ctx, withHeader(result.preview));
         return;
       case PREPARE_STATUS.REJECTED:
         await ctx.reply(result.message);
@@ -494,6 +623,7 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
     sheet: string,
     ref: DayRef,
     skipAliasQuestions: readonly string[] = [],
+    chosenMonth?: MonthKey,
   ): Promise<void> {
     let ipv: IpvDay;
     try {
@@ -503,8 +633,9 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
       await ctx.reply(`No pude leer la hoja «${sheet}»: ${error.message}`);
       return;
     }
-    // El día va al libro de su mes (un IPV de diciembre cargado en enero es del año pasado).
-    const month = monthOfRef(ipv, today());
+    // Hoja sin fecha: el mes elegido con el selector, tal cual. Hoja fechada: el libro de
+    // su mes (un IPV de diciembre cargado en enero es del año pasado).
+    const month = chosenMonth ?? monthOfRef(ipv, today());
     const prepared = await withTyping(ctx, () =>
       prepareIpvLoad(deps.pipeline, actorOf(ctx), {
         ipv,
@@ -524,6 +655,7 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
       source,
       sheet,
       ref,
+      ...(chosenMonth === undefined ? {} : { month: chosenMonth }),
       pendingId: prepared.status === PREPARE_STATUS.READY ? prepared.pendingId : null,
       questions,
       index: 0,
@@ -565,16 +697,27 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
       }
     }
     await ctx.reply('🔄 Rehago la vista previa con las equivalencias nuevas…');
-    await loadSheet(ctx, review.source, review.sheet, review.ref, review.skipped);
+    await loadSheet(ctx, review.source, review.sheet, review.ref, review.skipped, review.month);
   }
 
-  /** Hoja ya elegida: si no dice su día (título del POS o nombre), se pregunta; si lo dice, se carga. */
+  /**
+   * Hoja ya elegida: si dice su día (título del POS o nombre), se carga en el libro de
+   * ese mes; si no, se pregunta el mes (selector) y después el día.
+   */
   async function useSheet(ctx: BotContext, source: IpvSource, sheets: string[], sheet: string) {
     const key = String(actorOf(ctx).telegramId);
     const ref = source.sheetDate(sheet);
     if (ref === null) {
-      ipvChoices.set(key, { step: IPV_STEP.DAY, source, sheets, sheet });
-      await ctx.reply(`Hoja «${sheet}». ${ASK_SHEET_DAY}`);
+      ipvChoices.set(key, { step: IPV_STEP.MONTH, source, sheets, sheet });
+      // Solo aquí se ofrece también el mes en curso aunque esté vacío: su día 01 se
+      // carga justamente así.
+      const asked = await askMonth(
+        ctx,
+        { kind: PICK_KIND.IPV_DAY, command: 'ipv', args: '' },
+        { include: currentMonth() },
+        `Hoja «${sheet}». ${MONTH_PICK_TEXT.ASK}`,
+      );
+      if (!asked) ipvChoices.delete(key);
       return;
     }
     ipvChoices.delete(key);
@@ -593,14 +736,25 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
       case IPV_STEP.SUGGESTION:
         await ctx.reply(BOT_TEXT.SUGGESTION_ABOVE);
         return;
+      case IPV_STEP.MONTH:
+        await ctx.reply(BOT_TEXT.CHOOSE_MONTH_ABOVE);
+        return;
       case IPV_STEP.DAY: {
-        const ref = parseDayAnswer(answer, todayIn(clock(), deps.timezone));
-        if (ref === null || choice.sheet === undefined) {
-          await ctx.reply(BOT_TEXT.SHEET_DAY_INVALID);
+        const month = choice.month;
+        if (month === undefined || choice.sheet === undefined) {
+          ipvChoices.delete(key);
+          await ctx.reply(BOT_TEXT.UPLOAD_EXPIRED);
+          return;
+        }
+        const ref = parseDayAnswer(answer, month);
+        if (ref === null) {
+          await ctx.reply(
+            isDayOfOtherMonth(answer, month) ? dayOfOtherMonth(month) : BOT_TEXT.SHEET_DAY_INVALID,
+          );
           return;
         }
         ipvChoices.delete(key);
-        await loadSheet(ctx, choice.source, choice.sheet, ref);
+        await loadSheet(ctx, choice.source, choice.sheet, ref, [], month);
         return;
       }
       case IPV_STEP.SHEET: {
@@ -631,15 +785,15 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
     }
   }
 
-  async function validate(ctx: BotContext, args: string): Promise<void> {
+  async function validate(ctx: BotContext, args: string, month: MonthKey): Promise<void> {
     const request = parseValidateArgs(args);
     const text = await withTyping(ctx, () =>
-      runValidation(deps.cuadre, request, {
+      runValidation(cuadreFor(month), request, {
         hasFixedExpenses: deps.settings.get(SETTING.HAS_FIXED_EXPENSES) === true,
         showFinancials: can(actorOf(ctx).role, PERMISSION.VIEW_FINANCIALS),
       }),
     );
-    await replyLong(ctx, text);
+    await replyLong(ctx, `${monthHeaderPlain(month)}\n${text}`);
   }
 
   /** /ayuda (y /start): la lista del rol y el teclado fijo de botones. */
@@ -649,14 +803,14 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
   }
 
   /** Días del cuadre para los botones de los flujos guiados. */
-  async function dayTabs(): Promise<string[]> {
-    return monthDays((await deps.cuadre.listDays()).map((day) => day.trim()));
+  async function dayTabs(month: MonthKey): Promise<string[]> {
+    return monthDays((await cuadreFor(month).listDays()).map((day) => day.trim()));
   }
 
   // Las equivalencias se leen en cada reporte: cambian con /equivalencia.
-  function reportDeps(): ReportDeps {
+  function reportDeps(month: MonthKey): ReportDeps {
     return {
-      cuadre: deps.cuadre,
+      cuadre: cuadreFor(month),
       aliases: buildAliasIndex(deps.pipeline.catalog.equivalences()),
       hasFixedExpenses: deps.settings.get(SETTING.HAS_FIXED_EXPENSES) === true,
     };
@@ -669,25 +823,28 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
   async function showReport(
     ctx: BotContext,
     result: ReportResult,
-    editPlaceholder?: EditPlaceholder,
+    month: MonthKey,
+    editPlaceholder: EditPlaceholder,
   ): Promise<void> {
+    const header = monthHeader(month);
     if (result.kind === REPORT_KIND.TEXT) {
       const [first, ...rest] = result.messages;
-      if (first !== undefined) {
-        if (editPlaceholder === undefined) await ctx.reply(first, { parse_mode: 'HTML' });
-        else await editPlaceholder(first);
-      }
-      for (const message of rest) await ctx.reply(message, { parse_mode: 'HTML' });
+      // El encabezado del mes va arriba del primer mensaje; si no cabe, va solo.
+      const joined = first === undefined ? header : `${header}\n${first}`;
+      const fits = joined.length <= TELEGRAM_MAX_TEXT;
+      await editPlaceholder(fits ? joined : header);
+      const tail = fits || first === undefined ? rest : [first, ...rest];
+      for (const message of tail) await ctx.reply(message, { parse_mode: 'HTML' });
       return;
     }
     const choiceId = productChoices.add({
       telegramId: actorOf(ctx).telegramId,
       request: result.request,
       options: result.options,
+      month,
     });
     const keyboard = productChoiceKeyboard(choiceId, result.options);
-    if (editPlaceholder === undefined) await ctx.reply(result.prompt, { reply_markup: keyboard });
-    else await editPlaceholder(esc(result.prompt), keyboard);
+    await editPlaceholder(`${header}\n${esc(result.prompt)}`, keyboard);
   }
 
   /**
@@ -697,9 +854,12 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
   async function runReport(
     ctx: BotContext,
     command: string,
+    month: MonthKey,
     run: () => Promise<ReportResult>,
   ): Promise<void> {
-    const placeholder = await ctx.reply(REPORT_PLACEHOLDER[command] ?? DEFAULT_PLACEHOLDER);
+    const placeholder = await ctx.reply(
+      `${REPORT_PLACEHOLDER[command] ?? DEFAULT_PLACEHOLDER} (${monthName(month)})`,
+    );
     const edit: EditPlaceholder = async (text, keyboard) => {
       await ctx.api.editMessageText(placeholder.chat.id, placeholder.message_id, text, {
         parse_mode: 'HTML',
@@ -712,13 +872,11 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
     } catch (error) {
       console.error(`Error generando /${command}:`, error);
       const reason = error instanceof Error ? error.message : String(error);
-      await edit(esc(`${BOT_TEXT.REPORT_ERROR}: ${reason}`));
+      await edit(`${monthHeader(month)}\n${esc(`${BOT_TEXT.REPORT_ERROR}: ${reason}`)}`);
       return;
     }
-    await showReport(ctx, result, edit);
+    await showReport(ctx, result, month, edit);
   }
-
-  const todayTab = () => dayTab(todayIn(clock(), deps.timezone));
 
   // ------------------------------------------------------------ IPV (documento)
   // Va antes que los comandos: un documento siempre es un IPV, tenga o no "/ipv" en el pie.
@@ -775,38 +933,43 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
   });
 
   // ------------------------------------------------------------ reportes
-  const reports: Readonly<Record<string, (args: string) => Promise<ReportResult>>> = {
-    hoy: () => todayReport(reportDeps(), todayTab()),
-    dia: (args) => dayReport(reportDeps(), args),
-    semana: () => weekReport(reportDeps()),
-    mes: () => monthReport(reportDeps()),
-    rango: (args) => rangeReport(reportDeps(), args),
-    gastos: (args) => expensesReport(reportDeps(), args),
-    inversion: (args) => inventoryReport(reportDeps(), args),
-    ganancia: () => profitReport(reportDeps()),
-    top: (args) => topReport(reportDeps(), args),
-    margen: (args) => marginsReport(reportDeps(), args),
-    fila: (args) => rowReport(reportDeps(), args),
-    producto: (args) => productReport(reportDeps(), args),
+  type MonthReport = (month: MonthKey, args: string) => Promise<ReportResult>;
+  const reports: Readonly<Record<string, MonthReport>> = {
+    dia: (month, args) => dayReport(reportDeps(month), args),
+    semana: (month) => weekReport(reportDeps(month)),
+    mes: (month) => monthReport(reportDeps(month)),
+    rango: (month, args) => rangeReport(reportDeps(month), args),
+    gastos: (month, args) => expensesReport(reportDeps(month), args),
+    inversion: (month, args) => inventoryReport(reportDeps(month), args),
+    ganancia: (month) => profitReport(reportDeps(month)),
+    top: (month, args) => topReport(reportDeps(month), args),
+    margen: (month, args) => marginsReport(reportDeps(month), args),
+    fila: (month, args) => rowReport(reportDeps(month), args),
+    producto: (month, args) => productReport(reportDeps(month), args),
   };
 
   // ------------------------------------------------------------ comandos
-  async function setTc(ctx: BotContext, args: string): Promise<void> {
-    const [rawValue = '', rawTab = ''] = args.trim().split(/\s+/);
-    const tc = parseTcValue(rawValue);
-    const tab =
-      rawTab === ''
-        ? dayTab(todayIn(clock(), deps.timezone))
-        : /^\d{1,2}$/.test(rawTab)
-          ? rawTab.padStart(2, '0')
-          : null;
-    if (tc === null || tab === null) {
+  /**
+   * /tc en el mes elegido. Con día (`/tc 780 05`): esa pestaña del mes. Sin día: la
+   * pestaña de hoy si el mes es el en curso; en otro mes se pide el día escrito y no
+   * queda nada pendiente.
+   */
+  async function setTc(ctx: BotContext, args: string, month: MonthKey): Promise<void> {
+    const parsed = parseTcArgs(args);
+    if (parsed === null) {
       await ctx.reply(BOT_TEXT.TC_USAGE);
       return;
     }
-    // Un día mayor que hoy es del mes anterior (`/tc 780 31` el 1 de noviembre).
-    const month = rawTab === '' ? monthOfDate(today()) : monthOfDayNumber(Number(tab), today());
-    await showPrepared(ctx, await prepareSetTc(deps.pipeline, actorOf(ctx), { tab, tc, month }));
+    let tab = parsed.tab;
+    if (tab === null) {
+      if (month !== currentMonth()) {
+        await ctx.reply(tcDayRequired(month));
+        return;
+      }
+      tab = dayTab(todayIn(clock(), deps.timezone));
+    }
+    const prepared = await prepareSetTc(deps.pipeline, actorOf(ctx), { tab, tc: parsed.tc, month });
+    await showPrepared(ctx, prepared, month);
   }
 
   // ------------------------------------------------------------ ➕ Gasto
@@ -967,7 +1130,7 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
                 deps.pipeline.catalog,
                 request,
                 await withTyping(ctx, () =>
-                  knownCuadreProducts(deps.pipeline.catalog, deps.cuadre),
+                  knownCuadreProducts(deps.pipeline.catalog, cuadreFor(currentMonth())),
                 ),
               )
             : prepareRemoveAlias(deps.pipeline.catalog, request.ipv);
@@ -1004,21 +1167,25 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
    * Un solo punto de entrada por comando: lo usan los comandos escritos, los botones
    * del teclado y los del menú en línea de versiones anteriores.
    */
-  async function runCommand(ctx: BotContext, command: string, args: string): Promise<void> {
-    const report = Object.hasOwn(reports, command) ? reports[command] : undefined;
-    if (report !== undefined) {
-      await runReport(ctx, command, () => report(args));
+  async function runCommand(
+    ctx: BotContext,
+    command: string,
+    args: string,
+    month?: MonthKey,
+  ): Promise<void> {
+    if (needsMonth(command)) {
+      // /tc mal escrito se explica antes de preguntar el mes: nunca se elige un mes en vano.
+      if (command === 'tc' && parseTcArgs(args) === null) {
+        await ctx.reply(BOT_TEXT.TC_USAGE);
+        return;
+      }
+      if (month === undefined) await askMonth(ctx, { kind: PICK_KIND.COMMAND, command, args });
+      else await runMonthCommand(ctx, command, args, month);
       return;
     }
     switch (command) {
       case 'ipv':
         await ctx.reply(args.trim() === '' ? BOT_TEXT.ASK_IPV_FILE : BOT_TEXT.NO_DRIVE);
-        return;
-      case 'validar':
-        await validate(ctx, args);
-        return;
-      case 'tc':
-        await setTc(ctx, args);
         return;
       case 'gasto':
         await askExpense(ctx, startExpense(today()));
@@ -1041,6 +1208,61 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
       default:
         await help(ctx);
     }
+  }
+
+  /** Comando que ya tiene su mes elegido: reportes, /validar y /tc. */
+  async function runMonthCommand(
+    ctx: BotContext,
+    command: string,
+    args: string,
+    month: MonthKey,
+  ): Promise<void> {
+    const report = Object.hasOwn(reports, command) ? reports[command] : undefined;
+    if (report !== undefined) {
+      await runReport(ctx, command, month, () => report(month, args));
+      return;
+    }
+    if (command === 'validar') {
+      await validate(ctx, args, month);
+      return;
+    }
+    if (command === 'tc') {
+      await setTc(ctx, args, month);
+      return;
+    }
+    // Un comando con mes sin implementación propia nunca corre "en otro mes" por omisión.
+    await help(ctx);
+  }
+
+  /**
+   * "📒 ¿De qué mes?" con un botón por mes ofrecido. Se pregunta siempre, aunque haya
+   * un solo mes: la elección es explícita en cada operación.
+   */
+  async function askMonth(
+    ctx: BotContext,
+    request: MonthPickRequest,
+    offer: AvailableMonthsOptions = {},
+    prompt?: string,
+  ): Promise<boolean> {
+    const options = await withTyping(ctx, () =>
+      availableMonths(deps.pipeline.books, deps.settings, offer),
+    );
+    if (options.length === 0) {
+      await ctx.reply(MONTH_PICK_TEXT.NO_MONTHS);
+      return false;
+    }
+    const pickId = monthPicks.add({
+      ...request,
+      telegramId: actorOf(ctx).telegramId,
+      months: options.map((option) => option.month),
+    });
+    const question =
+      prompt ??
+      (request.kind === PICK_KIND.COMMAND
+        ? askMonthForCommand(request.command)
+        : MONTH_PICK_TEXT.ASK);
+    await ctx.reply(question, { reply_markup: monthButtons(pickId, options) });
+    return true;
   }
 
   bot.command('start', async (ctx) => {
@@ -1069,48 +1291,80 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
 
   // ------------------------------------------------------------ teclado fijo
   /** Un botón del teclado: lo ejecuta o abre su pregunta. Reemplaza cualquier flujo previo. */
-  async function pressButton(ctx: BotContext, button: MenuButton): Promise<void> {
+  async function pressButton(ctx: BotContext, button: MenuButton, month?: MonthKey): Promise<void> {
     const key = String(actorOf(ctx).telegramId);
     flows.delete(key);
     ipvChoices.delete(key);
+    // Todo botón de un comando con mes (también los flujos guiados) pregunta primero el
+    // mes; el toque vuelve aquí con el mes elegido.
+    if (needsMonth(button.command) && month === undefined) {
+      await askMonth(ctx, { kind: PICK_KIND.BUTTON, command: button.command, args: '' });
+      return;
+    }
     switch (button.flow) {
       case BUTTON_FLOW.RUN:
-        await runCommand(ctx, button.command, '');
+        await runCommand(ctx, button.command, '', month);
         return;
       case BUTTON_FLOW.ASK_IPV:
         await ctx.reply(BOT_TEXT.ASK_IPV_FILE);
         return;
       case BUTTON_FLOW.ASK_TC:
-        flows.set(key, { step: FLOW_STEP.TC, command: button.command });
-        await ctx.reply(BOT_TEXT.ASK_TC_VALUE);
+        if (month === undefined) throw new Error(`Botón ${button.command} sin mes elegido.`);
+        flows.set(key, { step: FLOW_STEP.TC, command: button.command, month });
+        // Mes en curso: solo el número (va a la pestaña de hoy). Otro mes: número y día.
+        await ctx.reply(month === currentMonth() ? BOT_TEXT.ASK_TC_VALUE : askTcValueAndDay(month));
         return;
       case BUTTON_FLOW.ASK_EXPENSE:
         await askExpense(ctx, startExpense(today()));
         return;
       case BUTTON_FLOW.ASK_PRODUCT:
-        flows.set(key, { step: FLOW_STEP.PRODUCT, command: button.command });
+      case BUTTON_FLOW.ASK_ROW:
+      case BUTTON_FLOW.ASK_TOP_METRIC:
+      case BUTTON_FLOW.ASK_DAY:
+      case BUTTON_FLOW.ASK_RANGE:
+        // `needsMonth` ya garantizó el mes; si un botón nuevo lo olvida, nunca se
+        // cae en silencio al mes en curso.
+        if (month === undefined) throw new Error(`Botón ${button.command} sin mes elegido.`);
+        await askGuidedFlow(ctx, button, month);
+        return;
+    }
+  }
+
+  /** Primer paso de un flujo guiado, ya con su mes. */
+  async function askGuidedFlow(
+    ctx: BotContext,
+    button: MenuButton,
+    month: MonthKey,
+  ): Promise<void> {
+    const key = String(actorOf(ctx).telegramId);
+    switch (button.flow) {
+      case BUTTON_FLOW.ASK_PRODUCT:
+        flows.set(key, { step: FLOW_STEP.PRODUCT, command: button.command, month });
         await ctx.reply(BOT_TEXT.ASK_PRODUCT);
         return;
       case BUTTON_FLOW.ASK_ROW:
-        flows.set(key, { step: FLOW_STEP.ROW_PRODUCT, command: button.command });
+        flows.set(key, { step: FLOW_STEP.ROW_PRODUCT, command: button.command, month });
         await ctx.reply(BOT_TEXT.ASK_ROW_PRODUCT);
         return;
       case BUTTON_FLOW.ASK_TOP_METRIC:
-        await ctx.reply(BOT_TEXT.ASK_TOP, { reply_markup: topMetricButtons() });
+        await ctx.reply(BOT_TEXT.ASK_TOP, { reply_markup: topMetricButtons(month) });
         return;
       case BUTTON_FLOW.ASK_DAY:
       case BUTTON_FLOW.ASK_RANGE: {
-        const days = await withTyping(ctx, dayTabs);
+        const days = await withTyping(ctx, () => dayTabs(month));
         if (days.length === 0) {
           await ctx.reply(BOT_TEXT.NO_DAYS);
           return;
         }
         const ask = button.flow === BUTTON_FLOW.ASK_DAY;
+        const flow = ask ? CALLBACK.FLOW_DAY : CALLBACK.FLOW_FROM;
         await ctx.reply(ask ? BOT_TEXT.ASK_DAY : BOT_TEXT.ASK_FROM, {
-          reply_markup: dayButtons(ask ? CALLBACK.FLOW_DAY : CALLBACK.FLOW_FROM, days),
+          reply_markup: dayButtons(flowPrefix(flow, month), days),
         });
         return;
       }
+      default:
+        throw new Error(`El botón ${button.command} no es un flujo guiado con mes.`);
     }
   }
 
@@ -1120,18 +1374,28 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
     switch (flow.step) {
       case FLOW_STEP.PRODUCT:
         flows.delete(key);
-        await runCommand(ctx, 'producto', answer);
+        if (flow.month === undefined) {
+          await ctx.reply(BOT_TEXT.FLOW_EXPIRED);
+          return;
+        }
+        await runCommand(ctx, 'producto', answer, flow.month);
         return;
       case FLOW_STEP.ROW_PRODUCT: {
-        const days = await withTyping(ctx, dayTabs);
+        const month = flow.month;
+        if (month === undefined) {
+          flows.delete(key);
+          await ctx.reply(BOT_TEXT.FLOW_EXPIRED);
+          return;
+        }
+        const days = await withTyping(ctx, () => dayTabs(month));
         if (days.length === 0) {
           flows.delete(key);
           await ctx.reply(BOT_TEXT.NO_DAYS);
           return;
         }
-        flows.set(key, { step: FLOW_STEP.ROW_DAY, command: flow.command, product: answer });
+        flows.set(key, { step: FLOW_STEP.ROW_DAY, command: flow.command, product: answer, month });
         await ctx.reply(rowDayPrompt(answer), {
-          reply_markup: dayButtons(CALLBACK.FLOW_ROW_DAY, days),
+          reply_markup: dayButtons(flowPrefix(CALLBACK.FLOW_ROW_DAY, month), days),
         });
         return;
       }
@@ -1139,13 +1403,30 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
         await ctx.reply(BOT_TEXT.CHOOSE_DAY_ABOVE);
         return;
       case FLOW_STEP.TC: {
-        const tc = parseTcValue(answer);
-        if (tc === null) {
-          await ctx.reply(BOT_TEXT.TC_NOT_NUMBER);
+        const month = flow.month;
+        if (month === undefined) {
+          flows.delete(key);
+          await ctx.reply(BOT_TEXT.FLOW_EXPIRED);
+          return;
+        }
+        if (month === currentMonth()) {
+          const tc = parseTcValue(answer);
+          if (tc === null) {
+            await ctx.reply(BOT_TEXT.TC_NOT_NUMBER);
+            return;
+          }
+          flows.delete(key);
+          await setTc(ctx, String(tc), month);
+          return;
+        }
+        // Otro mes: el día es obligatorio, se insiste hasta tener los dos.
+        const parsed = parseTcArgs(answer);
+        if (parsed === null || parsed.tab === null) {
+          await ctx.reply(BOT_TEXT.TC_VALUE_AND_DAY);
           return;
         }
         flows.delete(key);
-        await setTc(ctx, String(tc));
+        await setTc(ctx, `${String(parsed.tc)} ${parsed.tab}`, month);
         return;
       }
       case FLOW_STEP.EXPENSE: {
@@ -1225,60 +1506,88 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
       return;
     }
     await removeKeyboard(ctx);
-    await runReport(ctx, choice.request.command, () =>
-      completeProductRequest(reportDeps(), choice.request, product),
+    await runReport(ctx, choice.request.command, choice.month, () =>
+      completeProductRequest(reportDeps(choice.month), choice.request, product),
     );
   });
 
-  // 📍 Día → /dia DD
-  bot.callbackQuery(new RegExp(`^${CALLBACK.FLOW_DAY}:(\\S+)$`), async (ctx) => {
+  /**
+   * Mes de un botón de flujo guiado. Sin mes (botón de una versión anterior) o con un
+   * mes que no está registrado (callback inventado): responde vencido y da null.
+   */
+  async function flowMonth(ctx: BotContext, raw: string | undefined): Promise<MonthKey | null> {
+    if (raw !== undefined && deps.pipeline.books.months().includes(raw)) return raw;
+    await ctx.reply(BOT_TEXT.FLOW_EXPIRED);
+    return null;
+  }
+
+  /** `<prefijo>:` + mes opcional (`AAAA-MM:`) + el resto; el mes queda en el grupo 1. */
+  const flowCallback = (prefix: string, rest: string) =>
+    new RegExp(`^${prefix}:(?:(\\d{4}-\\d{2}):)?${rest}$`);
+
+  // 📍 Día → /dia DD del mes elegido
+  bot.callbackQuery(flowCallback(CALLBACK.FLOW_DAY, '([^:\\s]+)'), async (ctx) => {
     await ctx.answerCallbackQuery();
     await removeKeyboard(ctx);
-    await runCommand(ctx, 'dia', ctx.match[1] ?? '');
+    const month = await flowMonth(ctx, ctx.match[1]);
+    if (month === null) return;
+    await runCommand(ctx, 'dia', ctx.match[2] ?? '', month);
   });
 
-  // ↔️ Rango, primer paso: "¿Hasta?" con los días desde el elegido.
-  bot.callbackQuery(new RegExp(`^${CALLBACK.FLOW_FROM}:(\\S+)$`), async (ctx) => {
+  // ↔️ Rango, primer paso: "¿Hasta?" con los días del mismo mes desde el elegido.
+  bot.callbackQuery(flowCallback(CALLBACK.FLOW_FROM, '([^:\\s]+)'), async (ctx) => {
     await ctx.answerCallbackQuery();
     await removeKeyboard(ctx);
-    const from = ctx.match[1] ?? '';
-    const days = await dayTabs();
+    const month = await flowMonth(ctx, ctx.match[1]);
+    if (month === null) return;
+    const from = ctx.match[2] ?? '';
+    const days = await withTyping(ctx, () => dayTabs(month));
     const start = days.indexOf(from);
     if (start < 0) {
       await ctx.reply(BOT_TEXT.FLOW_EXPIRED);
       return;
     }
     await ctx.reply(BOT_TEXT.ASK_TO, {
-      reply_markup: dayButtons(`${CALLBACK.FLOW_TO}:${from}`, days.slice(start)),
+      reply_markup: dayButtons(`${flowPrefix(CALLBACK.FLOW_TO, month)}:${from}`, days.slice(start)),
     });
   });
 
-  // ↔️ Rango, segundo paso → /rango DD DD
-  bot.callbackQuery(new RegExp(`^${CALLBACK.FLOW_TO}:([^:]+):(\\S+)$`), async (ctx) => {
+  // ↔️ Rango, segundo paso → /rango DD DD del mes elegido
+  bot.callbackQuery(flowCallback(CALLBACK.FLOW_TO, '([^:\\s]+):([^:\\s]+)'), async (ctx) => {
     await ctx.answerCallbackQuery();
     await removeKeyboard(ctx);
-    await runCommand(ctx, 'rango', `${ctx.match[1] ?? ''} ${ctx.match[2] ?? ''}`);
+    const month = await flowMonth(ctx, ctx.match[1]);
+    if (month === null) return;
+    await runCommand(ctx, 'rango', `${ctx.match[2] ?? ''} ${ctx.match[3] ?? ''}`, month);
   });
 
-  // 📄 Fila, día elegido → /fila <producto> DD
-  bot.callbackQuery(new RegExp(`^${CALLBACK.FLOW_ROW_DAY}:(\\S+)$`), async (ctx) => {
+  // 📄 Fila, día elegido → /fila <producto> DD del mes de la pregunta
+  bot.callbackQuery(flowCallback(CALLBACK.FLOW_ROW_DAY, '([^:\\s]+)'), async (ctx) => {
     await ctx.answerCallbackQuery();
     const key = String(actorOf(ctx).telegramId);
     const flow = flows.get(key);
-    if (flow?.step !== FLOW_STEP.ROW_DAY || flow.product === undefined) {
+    const month = ctx.match[1];
+    if (
+      flow?.step !== FLOW_STEP.ROW_DAY ||
+      flow.product === undefined ||
+      flow.month === undefined ||
+      month !== flow.month
+    ) {
       await ctx.reply(BOT_TEXT.FLOW_EXPIRED);
       return;
     }
     flows.delete(key);
     await removeKeyboard(ctx);
-    await runCommand(ctx, 'fila', `${flow.product} ${ctx.match[1] ?? ''}`);
+    await runCommand(ctx, 'fila', `${flow.product} ${ctx.match[2] ?? ''}`, flow.month);
   });
 
-  // 🏆 Top → /top <métrica>
-  bot.callbackQuery(new RegExp(`^${CALLBACK.FLOW_TOP}:(\\w+)$`), async (ctx) => {
+  // 🏆 Top → /top <métrica> del mes elegido
+  bot.callbackQuery(flowCallback(CALLBACK.FLOW_TOP, '(\\w+)'), async (ctx) => {
     await ctx.answerCallbackQuery();
     await removeKeyboard(ctx);
-    await runCommand(ctx, 'top', ctx.match[1] ?? '');
+    const month = await flowMonth(ctx, ctx.match[1]);
+    if (month === null) return;
+    await runCommand(ctx, 'top', ctx.match[2] ?? '', month);
   });
 
   // ➕ Gasto: [Hoy] / [Otro día], moneda, ✅ / ❌.
@@ -1415,11 +1724,62 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
     else await finishAliasReview(ctx, review);
   });
 
+  // 📒 Mes elegido: reanuda el comando o el botón que lo pidió, sobre ese mes.
+  bot.callbackQuery(
+    new RegExp(`^${CALLBACK.MONTH_PICK}:([A-Za-z0-9_-]+):(\\d{4}-\\d{2})$`),
+    async (ctx) => {
+      await ctx.answerCallbackQuery();
+      const actor = actorOf(ctx);
+      const pickId = ctx.match[1] ?? '';
+      const month = ctx.match[2] ?? '';
+      const pick = monthPicks.get(pickId);
+      // El middleware ya exigió el permiso del comando guardado; aquí se exige además
+      // que sea de quien toca, que el mes se haya ofrecido y (por si acaso) el permiso.
+      if (
+        pick === undefined ||
+        pick.telegramId !== actor.telegramId ||
+        !pick.months.includes(month) ||
+        !canRunCommand(actor.role, pick.command)
+      ) {
+        await ctx.reply(BOT_TEXT.CHOICE_EXPIRED);
+        return;
+      }
+      // Se suelta antes de correr: un segundo toque ya no hace nada.
+      monthPicks.delete(pickId);
+      await removeKeyboard(ctx);
+      switch (pick.kind) {
+        case PICK_KIND.COMMAND:
+          await runCommand(ctx, pick.command, pick.args, month);
+          return;
+        case PICK_KIND.BUTTON: {
+          const pressed = MENU_BUTTONS.find((candidate) => candidate.command === pick.command);
+          if (pressed === undefined) {
+            await ctx.reply(BOT_TEXT.CHOICE_EXPIRED);
+            return;
+          }
+          await pressButton(ctx, pressed, month);
+          return;
+        }
+        case PICK_KIND.IPV_DAY: {
+          const key = String(actor.telegramId);
+          const choice = ipvChoices.get(key);
+          // /cancelar, otro archivo o un botón del teclado ya soltaron la hoja.
+          if (choice?.step !== IPV_STEP.MONTH || choice.sheet === undefined) {
+            await ctx.reply(BOT_TEXT.UPLOAD_EXPIRED);
+            return;
+          }
+          ipvChoices.set(key, { ...choice, step: IPV_STEP.DAY, month });
+          await ctx.reply(`Hoja «${choice.sheet}». ${askSheetDay(month)}`);
+          return;
+        }
+      }
+    },
+  );
+
   // Menú en línea de versiones anteriores: sigue funcionando desde el historial del chat.
   bot.callbackQuery(new RegExp(`^${CALLBACK.MENU}:(\\w+)$`), async (ctx) => {
     await ctx.answerCallbackQuery();
-    const command = ctx.match[1] ?? '';
-    await runCommand(ctx, command, '');
+    await runCommand(ctx, currentCommand(ctx.match[1] ?? ''), '');
   });
 
   bot.on('callback_query:data', async (ctx) => {
@@ -1431,6 +1791,12 @@ export function createBot(deps: BotDeps, options: CreateBotOptions): Bot<BotCont
     const text = ctx.message.text;
     if (text.startsWith('/')) {
       await ctx.reply(BOT_TEXT.UNKNOWN_COMMAND);
+      return;
+    }
+    // Un botón retirado (teclado viejo del cliente) muestra /ayuda con el teclado nuevo,
+    // aunque haya una pregunta abierta: nunca se toma como respuesta.
+    if (isRetiredLabel(text)) {
+      await help(ctx);
       return;
     }
     // Los botones del teclado ganan siempre: tocar uno nunca se toma como respuesta.

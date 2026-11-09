@@ -40,7 +40,6 @@ export interface MenuButton {
 
 /** Todos los botones, en el orden en que se muestran (3 por fila). */
 export const MENU_BUTTONS: readonly MenuButton[] = [
-  { label: '📅 Hoy', command: 'hoy', flow: BUTTON_FLOW.RUN },
   { label: '📆 Mes', command: 'mes', flow: BUTTON_FLOW.RUN },
   { label: '🗓 Semana', command: 'semana', flow: BUTTON_FLOW.RUN },
   { label: '💰 Ganancia', command: 'ganancia', flow: BUTTON_FLOW.RUN },
@@ -108,7 +107,6 @@ const MENU_DESCRIPTION: Readonly<Record<string, string>> = {
   tc: 'Fijar la tasa de cambio del día',
   gasto: 'Registrar un gasto en el historial',
   deshacer: 'Revertir la última escritura',
-  hoy: 'Resumen de hoy',
   dia: 'Resumen de un día',
   mes: 'Utilidad de cada día del mes',
   semana: 'Resumen de los últimos 7 días',

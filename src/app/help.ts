@@ -1,4 +1,5 @@
 import { canRunCommand, type Role } from '../core/auth.js';
+import { needsMonth } from './month-pick.js';
 
 /** /ayuda según el rol. Sin IA: el texto libre recibe la ayuda y el teclado de botones. */
 
@@ -14,7 +15,7 @@ export const MVP_COMMANDS: readonly CommandHelp[] = [
     command: 'ipv',
     usage: '/ipv',
     description:
-      'Cargar el IPV del día: envía (o reenvía) el .xlsx. Si tiene varias hojas, te pregunto cuál analizar; o escribe el nombre de la hoja en el pie del archivo, por ejemplo 3 oct.',
+      'Cargar el IPV del día: envía (o reenvía) el .xlsx. Si tiene varias hojas, te pregunto cuál analizar; o escribe el nombre de la hoja en el pie del archivo, por ejemplo 3 oct. Si la hoja no tiene fecha, pregunto la hoja, después el mes y después el día; un archivo con fecha no pregunta el mes.',
   },
   {
     command: 'validar',
@@ -24,7 +25,8 @@ export const MVP_COMMANDS: readonly CommandHelp[] = [
   {
     command: 'tc',
     usage: '/tc 780 [03]',
-    description: 'Fijar la tasa de cambio del día.',
+    description:
+      'Fijar la tasa de cambio en el mes que elijas: sin día, la pestaña de hoy (solo en el mes en curso); en un mes pasado escribe también el día, por ejemplo /tc 780 05 (con el botón 💱 TC: 780 05).',
   },
   {
     command: 'gasto',
@@ -54,11 +56,6 @@ export const MVP_COMMANDS: readonly CommandHelp[] = [
     usage: '/equivalencia [cuadre = IPV | quitar IPV]',
     description:
       'Nombres del IPV que son el mismo producto del cuadre: sin datos, la lista; «pollo = pollo lb» agrega; «quitar pollo lb» quita. También se eligen en la vista previa de /ipv.',
-  },
-  {
-    command: 'hoy',
-    usage: '/hoy',
-    description: 'Resumen de hoy (o del último día cargado).',
   },
   {
     command: 'dia',
@@ -122,9 +119,25 @@ export function commandsFor(role: Role): CommandHelp[] {
   return MVP_COMMANDS.filter((entry) => canRunCommand(role, entry.command));
 }
 
+/** Nota del selector de mes: solo para quien puede correr algún comando que lo usa. */
+export function monthPickerNote(role: Role): string | null {
+  const scoped = commandsFor(role).filter((entry) => needsMonth(entry.command));
+  if (scoped.length === 0) return null;
+  const list = scoped.map((entry) => `/${entry.command}`).join(', ');
+  const unscoped = commandsFor(role)
+    .filter((entry) => entry.command !== 'ayuda' && !needsMonth(entry.command))
+    .map((entry) =>
+      entry.command === 'ipv' ? '/ipv con un archivo con fecha' : `/${entry.command}`,
+    );
+  const skip = unscoped.length > 0 ? ` No preguntan el mes: ${unscoped.join(', ')}.` : '';
+  return `📒 Antes de ${list} te pregunto el mes con botones (🔒 = mes cerrado; solo aparecen los meses con días cargados).${skip}`;
+}
+
 export function helpText(role: Role): string {
   const lines = ['📖 Comandos disponibles:', ''];
   for (const entry of commandsFor(role)) lines.push(`${entry.usage} — ${entry.description}`);
+  const note = monthPickerNote(role);
+  if (note !== null) lines.push('', note);
   lines.push(
     '',
     'Los botones de abajo hacen lo mismo sin escribir: los que necesitan un dato (día, producto, TC, gasto) te lo preguntan. /cancelar abandona la pregunta.',
